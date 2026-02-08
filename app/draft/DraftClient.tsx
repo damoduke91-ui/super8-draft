@@ -27,12 +27,12 @@ type Player = {
 
 const POS_MAP: Record<string, string> = {
   ALL: "All",
-  DEF: "DEF",
   KD: "KD",
+  DEF: "DEF",
   MID: "MID",
-  RUC: "RUC",
   FWD: "FWD",
   KF: "KF",
+  RUC: "RUC",
 };
 
 function clamp(n: number, min: number, max: number) {
