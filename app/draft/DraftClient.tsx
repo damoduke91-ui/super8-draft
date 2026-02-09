@@ -198,6 +198,19 @@ export default function DraftClient() {
 
   const available = useMemo(() => players.filter((p) => p.drafted_by_coach_id == null), [players]);
 
+useEffect(() => {
+  const counts: Record<string, number> = {};
+
+  for (const p of available) {
+    for (const t of splitPos(p.pos)) {
+      counts[t] = (counts[t] || 0) + 1;
+    }
+  }
+
+  console.log("POS COUNTS (available):", counts);
+}, [available]);
+
+
   const filtered = useMemo(() => {
     let list = available;
 
