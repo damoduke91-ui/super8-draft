@@ -1,16 +1,25 @@
-# env / secrets
+# dependencies
+node_modules
+
+# next.js
+.next
+out
+
+# env files
+.env
 .env.local
 env.local
-.env
 
-# editor junk
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS/editor
+.DS_Store
 *.swp
 *.swo
 *.bak
 *.tmp
 *.BACKUP*
-.DS_Store
-
-# random local folders/files you listed
-linear
-0.5
