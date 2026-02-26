@@ -1,3 +1,9 @@
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Main",
+};
+
 export default function HomePage() {
   const cardStyle: React.CSSProperties = {
     border: "1px solid #e5e7eb",
@@ -57,7 +63,15 @@ export default function HomePage() {
             marginBottom: 18,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
             <div>
               <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: -0.2, color: "#111827" }}>
                 Super 8 Draft
@@ -120,7 +134,18 @@ export default function HomePage() {
               <div style={{ fontSize: 16, fontWeight: 900, color: "#111827" }}>Tip</div>
               <div style={{ color: "#6b7280", fontSize: 13, lineHeight: 1.5 }}>
                 You can open the board on a TV like:
-                <div style={{ marginTop: 8, padding: 10, borderRadius: 12, border: "1px solid #e5e7eb", background: "#f9fafb", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: 12 }}>
+                <div
+                  style={{
+                    marginTop: 8,
+                    padding: 10,
+                    borderRadius: 12,
+                    border: "1px solid #e5e7eb",
+                    background: "#f9fafb",
+                    fontFamily:
+                      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                    fontSize: 12,
+                  }}
+                >
                   /board?room=DUMMY1
                 </div>
               </div>
@@ -148,4 +173,3 @@ export default function HomePage() {
     </div>
   );
 }
-

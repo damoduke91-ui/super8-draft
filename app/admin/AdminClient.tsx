@@ -1,488 +1,767 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import DraftClient from "../draft/DraftClient";
 import { supabase } from "../lib/supabase";
 
-type DraftState = {
-  room_id: string;
-  is_paused: boolean;
-  pause_reason: string | null;
-  rounds_total: number;
-  current_round: number;
-  current_pick_in_round: number;
-  current_coach_id: number;
-};
-
 type Coach = {
+  room_id: string;
   coach_id: number;
   coach_name: string;
+  session_id: string | null;
 };
 
 type DraftOrderRow = {
+  room_id: string;
   overall_pick: number;
   coach_id: number;
 };
 
-function pauseReasonLabel(pause_reason: string | null) {
-  if (!pause_reason) return null;
-  if (pause_reason.startsWith("WAIT_BLOCK_")) {
-    const block = pause_reason.replace("WAIT_BLOCK_", "");
-    return `Waiting for draft order for rounds ${block}…`;
-  }
-  return "Paused";
-}
+const BLOCKS = [
+  { label: "Rounds 1–2", from: 1, to: 2 },
+  { label: "Rounds 3–10", from: 3, to: 10 },
+  { label: "Rounds 11–20", from: 11, to: 20 },
+  { label: "Rounds 21–30", from: 21, to: 30 },
+  { label: "Rounds 31–40", from: 31, to: 40 },
+  { label: "Rounds 41–46", from: 41, to: 46 },
+] as const;
 
 export default function AdminClient() {
   const sp = useSearchParams();
   const router = useRouter();
 
-  const room = sp.get("room") || "DUMMY1";
+  const roomFromUrl = sp.get("room") || "";
 
-  const [state, setState] = useState<DraftState | null>(null);
+  // ✅ split "what you type" vs "what the app uses"
+  const [roomIdInput, setRoomIdInput] = useState(roomFromUrl || "DUMMY1");
+  const [roomId, setRoomId] = useState((roomFromUrl || "DUMMY1").trim());
+
+  const [blockIdx, setBlockIdx] = useState(0);
+
+  // generator controls
+  const [coachIdsStr, setCoachIdsStr] = useState("1,2,3,4,5,6,7,8");
+  const [shuffle, setShuffle] = useState(false);
+  const [seed, setSeed] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string>("");
+
+  // manual editor state
   const [coaches, setCoaches] = useState<Coach[]>([]);
   const [draftOrder, setDraftOrder] = useState<DraftOrderRow[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [loadErr, setLoadErr] = useState<string>("");
 
-  const [roundsTotalInput, setRoundsTotalInput] = useState<number>(46);
+  // local edits: overall_pick -> coach_id
+  const [edits, setEdits] = useState<Record<number, number>>({});
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
 
-  const loadState = async () => {
-    const { data, error } = await supabase
-      .from("draft_state")
-      .select(
-        "room_id,is_paused,pause_reason,rounds_total,current_round,current_pick_in_round,current_coach_id"
-      )
-      .eq("room_id", room)
-      .single();
+  // reset button busy
+  const [resetBusy, setResetBusy] = useState(false);
 
-    if (error) {
-      console.error("admin loadState error:", error);
-      setState(null);
-    } else {
-      const st = data as DraftState;
-      setState(st);
-      setRoundsTotalInput(st.rounds_total ?? 46);
-    }
-  };
+  // ✅ pro toggle
+  const [autoSaveAfterReset, setAutoSaveAfterReset] = useState(true);
 
-  const loadCoaches = async () => {
-    const { data, error } = await supabase
-      .from("coaches")
-      .select("coach_id,coach_name")
-      .eq("room_id", room)
-      .order("coach_id");
+  // force refresh of embedded DraftClient after save/generate
+  const [refreshKey, setRefreshKey] = useState(0);
 
-    if (error) {
-      console.error("admin loadCoaches error:", error);
-      setCoaches([]);
-    } else {
-      setCoaches((data as Coach[]) || []);
-    }
-  };
+  const block = BLOCKS[blockIdx];
 
-  const loadDraftOrder = async () => {
-    const { data, error } = await supabase
-      .from("draft_order")
-      .select("overall_pick,coach_id")
-      .eq("room_id", room)
-      .order("overall_pick");
+  // ✅ Apply the room (only then do DB calls + DraftClient refresh)
+  function applyRoom(nextRoom?: string) {
+    const next = (nextRoom ?? roomIdInput).trim();
+    if (!next) return;
 
-    if (error) {
-      console.error("admin loadDraftOrder error:", error);
-      setDraftOrder([]);
-    } else {
-      setDraftOrder((data as DraftOrderRow[]) || []);
-    }
-  };
+    setRoomId(next);
 
-  useEffect(() => {
-    loadState();
-    loadCoaches();
-    loadDraftOrder();
+    // preserve existing `coach` query param if present
+    const coach = sp.get("coach");
+    const qs = new URLSearchParams();
+    qs.set("room", next);
+    if (coach) qs.set("coach", coach);
 
-    const s1 = supabase
-      .channel(`admin_state_${room}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "draft_state", filter: `room_id=eq.${room}` },
-        () => loadState()
-      )
-      .subscribe();
+    router.replace(`/admin?${qs.toString()}`);
+  }
 
-    const s2 = supabase
-      .channel(`admin_coaches_${room}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "coaches", filter: `room_id=eq.${room}` },
-        () => loadCoaches()
-      )
-      .subscribe();
+  const coachIdsParsed = useMemo(() => {
+    return coachIdsStr
+      .split(",")
+      .map((x) => Number(x.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+  }, [coachIdsStr]);
 
-    const s3 = supabase
-      .channel(`admin_order_${room}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "draft_order", filter: `room_id=eq.${room}` },
-        () => loadDraftOrder()
-      )
-      .subscribe();
-
-    const poll = setInterval(() => {
-      loadState();
-      loadCoaches();
-      loadDraftOrder();
-    }, 1500);
-
-    return () => {
-      supabase.removeChannel(s1);
-      supabase.removeChannel(s2);
-      supabase.removeChannel(s3);
-      clearInterval(poll);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room]);
-
-  const topLine = useMemo(() => {
-    if (!state) return `Room ${room} • Loading…`;
-    const live = state.is_paused ? "PAUSED" : "LIVE";
-    return `Room ${room} • Round ${state.current_round}/${state.rounds_total} • Pick ${state.current_pick_in_round} • ${live}`;
-  }, [state, room]);
+  const coachesSorted = useMemo(() => {
+    return [...coaches].sort((a, b) => a.coach_id - b.coach_id);
+  }, [coaches]);
 
   const coachNameById = useMemo(() => {
     const m = new Map<number, string>();
-    coaches.forEach((c) => m.set(c.coach_id, c.coach_name));
+    for (const c of coachesSorted) m.set(c.coach_id, c.coach_name);
     return m;
-  }, [coaches]);
+  }, [coachesSorted]);
 
-  // --- UI styles (matches Board polish) ---
-  const pageBg = "#f3f4f6";
+  // If coaches table empty, infer coach IDs from current draft_order
+  const inferredCoachIds = useMemo(() => {
+    const s = new Set<number>();
+    for (const r of draftOrder) s.add(r.coach_id);
+    return Array.from(s).sort((a, b) => a - b);
+  }, [draftOrder]);
 
-  const card: CSSProperties = {
-    background: "white",
-    borderRadius: 16,
-    padding: 18,
-    boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
-    border: "1px solid #eee",
-  };
-
-  const btn: CSSProperties = {
-    padding: "10px 14px",
-    borderRadius: 10,
-    border: "1px solid #111",
-    background: "white",
-    color: "#111",
-    fontWeight: 800,
-    cursor: "pointer",
-  };
-
-  const btnDark: CSSProperties = {
-    ...btn,
-    background: "#111",
-    color: "white",
-  };
-
-  const btnDanger: CSSProperties = {
-    ...btn,
-    border: "1px solid #b91c1c",
-    color: "#b91c1c",
-  };
-
-  const input: CSSProperties = {
-    padding: "10px 12px",
-    borderRadius: 10,
-    border: "1px solid #ddd",
-    background: "white",
-    outline: "none",
-    fontWeight: 700,
-    width: 120,
-  };
-
-  // -------------------------
-  // Actions (NO RPC — because only draft_pick exists)
-  // -------------------------
-
-  const setPaused = async (paused: boolean) => {
-    setBusy(true);
-    try {
-      const { error } = await supabase
-        .from("draft_state")
-        .update({
-          is_paused: paused,
-          pause_reason: paused ? "Paused" : null,
-        })
-        .eq("room_id", room);
-
-      if (error) {
-        console.error("admin setPaused error:", error);
-        alert("Pause update failed: " + error.message);
-        return;
-      }
-
-      await loadState();
-    } finally {
-      setBusy(false);
+  const coachOptions = useMemo(() => {
+    if (coachesSorted.length) {
+      return coachesSorted.map((c) => ({ id: c.coach_id, name: c.coach_name }));
     }
-  };
+    return inferredCoachIds.map((id) => ({ id, name: `Coach ${id}` }));
+  }, [coachesSorted, inferredCoachIds]);
 
-  const setRoundsTotal = async () => {
-    if (!Number.isFinite(roundsTotalInput) || roundsTotalInput < 1 || roundsTotalInput > 200) {
-      alert("Rounds total must be between 1 and 200.");
-      return;
+  const nCoaches = coachOptions.length;
+
+  const draftOrderByPick = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const row of draftOrder) m.set(row.overall_pick, row.coach_id);
+    return m;
+  }, [draftOrder]);
+
+  function overallPick(round: number, pickInRound: number) {
+    return (round - 1) * nCoaches + pickInRound;
+  }
+
+  // Load coaches + draft_order for this room
+  async function loadData(room: string) {
+    setLoadErr("");
+    setSaveMsg("");
+    setEdits({});
+
+    if (!room.trim()) return;
+
+    const [cRes, oRes] = await Promise.all([
+      supabase
+        .from("coaches")
+        .select("room_id,coach_id,coach_name,session_id")
+        .eq("room_id", room)
+        .order("coach_id", { ascending: true }),
+      supabase
+        .from("draft_order")
+        .select("room_id,overall_pick,coach_id")
+        .eq("room_id", room)
+        .order("overall_pick", { ascending: true }),
+    ]);
+
+    if (cRes.error) {
+      setLoadErr(`Coaches load error: ${cRes.error.message}`);
+      setCoaches([]);
+    } else {
+      setCoaches((cRes.data as Coach[]) || []);
     }
 
-    setBusy(true);
-    try {
-      const { error } = await supabase
-        .from("draft_state")
-        .update({ rounds_total: roundsTotalInput })
-        .eq("room_id", room);
-
-      if (error) {
-        console.error("admin setRoundsTotal error:", error);
-        alert("Rounds update failed: " + error.message);
-        return;
-      }
-
-      await loadState();
-    } finally {
-      setBusy(false);
+    if (oRes.error) {
+      setLoadErr(
+        (prev) => (prev ? prev + "\n" : "") + `Draft order load error: ${oRes.error.message}`
+      );
+      setDraftOrder([]);
+    } else {
+      setDraftOrder((oRes.data as DraftOrderRow[]) || []);
     }
-  };
+  }
 
-  const resetDraft = async () => {
-    if (!confirm("Reset the draft for this room? This cannot be undone.")) return;
+  // ✅ now ONLY runs when you "Load room" (or press Enter)
+  useEffect(() => {
+    loadData(roomId.trim());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
+
+  async function generate() {
+    setMsg("");
+    setSaveMsg("");
+    if (!roomId.trim()) return setMsg("Room id is required.");
+    if (coachIdsParsed.length === 0) return setMsg("Coach IDs list is empty/invalid.");
 
     setBusy(true);
     try {
-      // 1) Undraft all players in this room
-      const { error: e1 } = await supabase
-        .from("players")
-        .update({
-          drafted_by_coach_id: null,
-          drafted_round: null,
-          drafted_pick: null,
-        })
-        .eq("room_id", room);
+      const res = await fetch("/api/admin/generate-snake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room_id: roomId.trim(),
+          round_from: block.from,
+          round_to: block.to,
+          coach_ids: coachIdsParsed,
+          shuffle,
+          seed: seed.trim() === "" ? null : Number(seed),
+        }),
+      });
 
-      if (e1) {
-        console.error("admin reset players error:", e1);
-        alert("Reset failed (players): " + e1.message);
-        return;
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        setMsg(`Failed: ${json?.error || json?.message || "Unknown error"}`);
+      } else {
+        setMsg(`✅ Generated snake order for ${block.label}`);
+        await loadData(roomId.trim());
+        setRefreshKey((k) => k + 1);
       }
-
-      // 2) Clear draft order for this room
-      const { error: e2 } = await supabase.from("draft_order").delete().eq("room_id", room);
-      if (e2) {
-        console.error("admin reset draft_order error:", e2);
-        alert("Reset failed (draft order): " + e2.message);
-        return;
-      }
-
-      // 3) Reset draft state
-      const nextCoachId =
-        coaches.length > 0 ? coaches.slice().sort((a, b) => a.coach_id - b.coach_id)[0].coach_id : 1;
-
-      const { error: e3 } = await supabase
-        .from("draft_state")
-        .update({
-          is_paused: true,
-          pause_reason: null,
-          current_round: 1,
-          current_pick_in_round: 1,
-          current_coach_id: nextCoachId,
-        })
-        .eq("room_id", room);
-
-      if (e3) {
-        console.error("admin reset draft_state error:", e3);
-        alert("Reset failed (draft state): " + e3.message);
-        return;
-      }
-
-      await loadState();
-      await loadDraftOrder();
+    } catch (e: any) {
+      setMsg(`Server error: ${e?.message || String(e)}`);
     } finally {
       setBusy(false);
     }
-  };
+  }
 
-  const orderSummary = useMemo(() => {
-    if (!draftOrder.length) return "No draft order set yet.";
-    const first = draftOrder
-      .slice(0, 10)
-      .map((r) => coachNameById.get(r.coach_id) ?? `Coach ${r.coach_id}`);
-    return `Order loaded • First picks: ${first.join(", ")}${draftOrder.length > 10 ? "…" : ""}`;
-  }, [draftOrder, coachNameById]);
+  // Build the grid for the selected block
+  const blockGrid = useMemo(() => {
+    if (!nCoaches) return null;
+
+    const rounds: { round: number; cells: any[] }[] = [];
+    for (let r = block.from; r <= block.to; r++) {
+      const cells = [];
+      for (let p = 1; p <= nCoaches; p++) {
+        const op = overallPick(r, p);
+        const current = edits[op] ?? draftOrderByPick.get(op) ?? null;
+        cells.push({ round: r, pickInRound: p, overallPick: op, coachId: current });
+      }
+      rounds.push({ round: r, cells });
+    }
+    return rounds;
+  }, [block.from, block.to, nCoaches, edits, draftOrderByPick]);
+
+  // =========================================================
+  // ✅ Snake regen across the ENTIRE selected block
+  // =========================================================
+
+  function blockOverallPickRange() {
+    const start = (block.from - 1) * nCoaches + 1;
+    const end = block.to * nCoaches;
+    return { start, end };
+  }
+
+  function baseIndexForCell(round: number, pickInRound: number) {
+    const n = nCoaches;
+    if (round % 2 === 1) return pickInRound - 1;
+    return n - pickInRound;
+  }
+
+  function buildBaseOrderFromPickMap(pickMap: Map<number, number>) {
+    const n = nCoaches;
+    const baseOrder: (number | null)[] = Array.from({ length: n }, () => null);
+
+    const r = block.from;
+    for (let p = 1; p <= n; p++) {
+      const op = overallPick(r, p);
+      const cid = pickMap.get(op) ?? null;
+      const idx = baseIndexForCell(r, p);
+      baseOrder[idx] = cid;
+    }
+
+    return baseOrder;
+  }
+
+  function buildFullBlockEditsFromBaseOrder(baseOrder: (number | null)[]) {
+    const n = nCoaches;
+    const next: Record<number, number> = {};
+
+    for (let r = block.from; r <= block.to; r++) {
+      for (let p = 1; p <= n; p++) {
+        const op = overallPick(r, p);
+        const idx = baseIndexForCell(r, p);
+        const desired = baseOrder[idx];
+        if (desired != null) next[op] = desired;
+      }
+    }
+
+    return next;
+  }
+
+  function getCurrentCoachId(op: number, prev: Record<number, number>) {
+    return prev[op] ?? draftOrderByPick.get(op) ?? null;
+  }
+
+  function buildBaseOrder(prev: Record<number, number>) {
+    const n = nCoaches;
+    const baseOrder: (number | null)[] = Array.from({ length: n }, () => null);
+
+    const r = block.from;
+    for (let p = 1; p <= n; p++) {
+      const op = overallPick(r, p);
+      const cid = getCurrentCoachId(op, prev);
+      const idx = baseIndexForCell(r, p);
+      baseOrder[idx] = cid;
+    }
+
+    return baseOrder;
+  }
+
+  function regenerateBlockEdits(prev: Record<number, number>, baseOrder: (number | null)[]) {
+    const n = nCoaches;
+    const next = { ...prev };
+
+    for (let r = block.from; r <= block.to; r++) {
+      for (let p = 1; p <= n; p++) {
+        const op = overallPick(r, p);
+        const idx = baseIndexForCell(r, p);
+        const desired = baseOrder[idx];
+
+        if (desired != null) next[op] = desired;
+        else {
+          const existing = getCurrentCoachId(op, prev);
+          if (existing != null) next[op] = existing;
+        }
+      }
+    }
+
+    return next;
+  }
+
+  function setCell(overall_pick: number, newCoachId: number) {
+    if (!nCoaches) return;
+    if (resetBusy || saveBusy) return;
+
+    setEdits((prev) => {
+      const n = nCoaches;
+
+      const round = Math.floor((overall_pick - 1) / n) + 1;
+      const pickInRound = ((overall_pick - 1) % n) + 1;
+
+      if (round < block.from || round > block.to) return prev;
+
+      const baseOrder = buildBaseOrder(prev);
+      const idx = baseIndexForCell(round, pickInRound);
+
+      if (baseOrder[idx] === newCoachId) return prev;
+
+      const otherIdx = baseOrder.findIndex((cid) => cid === newCoachId);
+      const displaced = baseOrder[idx];
+      baseOrder[idx] = newCoachId;
+
+      if (otherIdx !== -1) {
+        baseOrder[otherIdx] = displaced ?? baseOrder[otherIdx];
+      }
+
+      return regenerateBlockEdits(prev, baseOrder);
+    });
+  }
+
+  const blockPickCount = useMemo(() => {
+    if (!nCoaches) return 0;
+    return (block.to - block.from + 1) * nCoaches;
+  }, [block.from, block.to, nCoaches]);
+
+  const changedCount = useMemo(() => Object.keys(edits).length, [edits]);
+  const willWriteCount = changedCount > 0 ? blockPickCount : 0;
+
+  async function saveManualEdits() {
+    setSaveMsg("");
+    if (!roomId.trim()) return setSaveMsg("Room id is required.");
+    if (!changedCount) return setSaveMsg("No changes to save.");
+    if (!nCoaches) return setSaveMsg("No coaches/columns available.");
+
+    const { start, end } = blockOverallPickRange();
+
+    const updates: { overall_pick: number; coach_id: number }[] = [];
+    for (let op = start; op <= end; op++) {
+      const cid = edits[op] ?? draftOrderByPick.get(op) ?? null;
+      if (cid == null) continue;
+      updates.push({ overall_pick: op, coach_id: cid });
+    }
+
+    setSaveBusy(true);
+    try {
+      const res = await fetch("/api/admin/set-draft-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room_id: roomId.trim(),
+          updates,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        setSaveMsg(`Save failed: ${json?.error || json?.message || "Unknown error"}`);
+      } else {
+        setSaveMsg(`✅ Saved block ${block.label} (${json.updated ?? updates.length} picks)`);
+        setEdits({});
+        await loadData(roomId.trim());
+        setRefreshKey((k) => k + 1);
+      }
+    } catch (e: any) {
+      setSaveMsg(`Server error: ${e?.message || String(e)}`);
+    } finally {
+      setSaveBusy(false);
+    }
+  }
+
+  async function resetBlockToGenerated() {
+    if (!roomId.trim()) return;
+    if (!nCoaches) return;
+
+    const ok = window.confirm(
+      `Reset ${block.label} back to the last generated/saved order?\n\nThis will discard any unsaved edits for this block.${
+        autoSaveAfterReset ? "\n\nAuto-save is ON: this will also write to the DB immediately." : ""
+      }`
+    );
+    if (!ok) return;
+
+    setResetBusy(true);
+    setSaveMsg("");
+    setMsg("");
+
+    try {
+      setEdits({});
+
+      const { start, end } = blockOverallPickRange();
+
+      const { data, error } = await supabase
+        .from("draft_order")
+        .select("room_id,overall_pick,coach_id")
+        .eq("room_id", roomId.trim())
+        .gte("overall_pick", start)
+        .lte("overall_pick", end)
+        .order("overall_pick", { ascending: true });
+
+      if (error) throw new Error(error.message);
+
+      const rows = (data as DraftOrderRow[]) || [];
+      const pickMap = new Map<number, number>();
+      for (const r of rows) pickMap.set(r.overall_pick, r.coach_id);
+
+      const baseOrder = buildBaseOrderFromPickMap(pickMap);
+      const nextEdits = buildFullBlockEditsFromBaseOrder(baseOrder);
+
+      setEdits(nextEdits);
+
+      if (autoSaveAfterReset) {
+        const updates: { overall_pick: number; coach_id: number }[] = [];
+        for (let op = start; op <= end; op++) {
+          const cid = nextEdits[op] ?? pickMap.get(op) ?? null;
+          if (cid == null) continue;
+          updates.push({ overall_pick: op, coach_id: cid });
+        }
+
+        const res = await fetch("/api/admin/set-draft-order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            room_id: roomId.trim(),
+            updates,
+          }),
+        });
+
+        const json = await res.json();
+        if (!res.ok || !json?.ok) {
+          throw new Error(json?.error || json?.message || "Unknown save error");
+        }
+
+        setEdits({});
+        setSaveMsg(`♻️ Reset + saved ${block.label} (${json.updated ?? updates.length} picks)`);
+      } else {
+        setSaveMsg(`♻️ Reset ${block.label} in editor. (Click Save block to write it back if needed)`);
+      }
+
+      await loadData(roomId.trim());
+      setRefreshKey((k) => k + 1);
+    } catch (e: any) {
+      setSaveMsg(`Reset failed: ${e?.message || String(e)}`);
+    } finally {
+      setResetBusy(false);
+    }
+  }
+
+  const editorLocked = resetBusy || saveBusy;
 
   return (
-    <div style={{ minHeight: "100vh", background: pageBg, padding: 20 }}>
-      <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
-        {/* Top card */}
-        <div style={card}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 12,
-              flexWrap: "wrap",
-              alignItems: "center",
+    <div style={{ padding: 16, maxWidth: 1200 }}>
+      <h1 style={{ marginTop: 0 }}>Admin</h1>
+
+      {/* Generator */}
+      <div style={{ display: "grid", gap: 10, maxWidth: 760 }}>
+        <label>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Room ID</div>
+          <input
+            suppressHydrationWarning
+            value={roomIdInput}
+            onChange={(e) => setRoomIdInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") applyRoom();
             }}
+            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
+          />
+        </label>
+
+        <button
+          type="button"
+          onClick={() => applyRoom()}
+          style={{
+            padding: "10px 12px",
+            borderRadius: 10,
+            border: "1px solid #222",
+            background: "#fff",
+            fontWeight: 900,
+            cursor: "pointer",
+            width: "fit-content",
+          }}
+        >
+          Load room
+        </button>
+
+        <div style={{ fontSize: 12, opacity: 0.75 }}>
+          Active room: <strong>{roomId || "(none)"}</strong>
+        </div>
+
+        <label>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Block</div>
+          <select
+            value={blockIdx}
+            onChange={(e) => setBlockIdx(Number(e.target.value))}
+            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
           >
-            <div>
-              <div style={{ fontSize: 18, fontWeight: 900 }}>Admin</div>
-              <div style={{ marginTop: 6, fontWeight: 800 }}>{topLine}</div>
-              <div style={{ marginTop: 6, fontSize: 13, opacity: 0.75 }}>
-                {state?.is_paused
-                  ? pauseReasonLabel(state.pause_reason) ?? "Paused"
-                  : "Live — use controls below to manage the room"}
-              </div>
-            </div>
+            {BLOCKS.map((b, i) => (
+              <option key={b.label} value={i}>
+                {b.label}
+              </option>
+            ))}
+          </select>
+        </label>
 
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <button onClick={() => router.push(`/join?room=${room}`)} style={btn} type="button">
-                Back to Join
-              </button>
-              <button onClick={() => router.push(`/board?room=${room}`)} style={btn} type="button">
-                Board
-              </button>
-              <button onClick={() => router.push(`/draft?room=${room}&coach=1`)} style={btn} type="button">
-                Draft (Coach 1)
-              </button>
-            </div>
+        <label>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Coach IDs (comma separated)</div>
+          <input
+            suppressHydrationWarning
+            value={coachIdsStr}
+            onChange={(e) => setCoachIdsStr(e.target.value)}
+            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
+          />
+          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>
+            Parsed: [{coachIdsParsed.join(", ")}]
           </div>
-        </div>
+        </label>
 
-        {/* Controls grid */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          {/* Draft controls */}
-          <div style={card}>
-            <div style={{ fontSize: 15, fontWeight: 900, marginBottom: 10 }}>Draft Controls</div>
+        <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <input type="checkbox" checked={shuffle} onChange={(e) => setShuffle(e.target.checked)} />
+          <span style={{ fontWeight: 800 }}>Shuffle coach order for this block</span>
+        </label>
 
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
-              <button
-                style={state?.is_paused ? btnDark : btn}
-                type="button"
-                disabled={busy}
-                onClick={() => setPaused(true)}
-              >
-                Pause
-              </button>
+        <label>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>Seed (optional, number)</div>
+          <input
+            suppressHydrationWarning
+            value={seed}
+            onChange={(e) => setSeed(e.target.value)}
+            placeholder="e.g. 0.42"
+            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
+          />
+        </label>
 
-              <button
-                style={!state?.is_paused ? btnDark : btn}
-                type="button"
-                disabled={busy}
-                onClick={() => setPaused(false)}
-              >
-                Resume
-              </button>
+        <button
+          type="button"
+          onClick={generate}
+          disabled={busy}
+          style={{
+            padding: "12px 14px",
+            borderRadius: 10,
+            border: "1px solid #222",
+            background: busy ? "#aaa" : "#111",
+            color: "#fff",
+            fontWeight: 900,
+            cursor: busy ? "not-allowed" : "pointer",
+          }}
+        >
+          {busy ? "Generating..." : "Generate snake for selected block"}
+        </button>
 
-              <button style={btnDanger} type="button" disabled={busy} onClick={resetDraft}>
-                Reset Draft
-              </button>
+        {msg ? <div style={{ marginTop: 6, fontWeight: 800 }}>{msg}</div> : null}
+      </div>
 
-              {busy ? <span style={{ fontSize: 12, opacity: 0.75 }}>Working…</span> : null}
+      {/* Manual editor */}
+      <div style={{ marginTop: 18, border: "1px solid #ddd", borderRadius: 12, padding: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Manual Order Editor</h2>
+            <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
+              Room: <strong>{roomId.trim() || "(blank)"}</strong> • Block: <strong>{block.label}</strong>
+              {" • "}
+              Coaches: <strong>{coachOptions.length}</strong>{" "}
+              {coachesSorted.length ? "(from coaches table)" : "(inferred from draft_order)"}
+              {" • "}
+              Picks loaded: <strong>{draftOrder.length}</strong>
             </div>
 
-            <div style={{ fontSize: 12, opacity: 0.75 }}>
-              Note: Your database currently only has the <code>draft_pick</code> RPC. Admin actions here use direct table
-              updates.
+            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
+              Mode: <strong>Snake regen</strong> — edit one pick and the entire block updates (even rounds reverse).
             </div>
-          </div>
 
-          {/* Room setup */}
-          <div style={card}>
-            <div style={{ fontSize: 15, fontWeight: 900, marginBottom: 10 }}>Room Setup</div>
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <div style={{ fontWeight: 800 }}>Rounds total</div>
+            <label style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 8 }}>
               <input
-                style={input}
-                type="number"
-                min={1}
-                max={200}
-                value={roundsTotalInput}
-                onChange={(e) => setRoundsTotalInput(Number(e.target.value))}
+                type="checkbox"
+                checked={autoSaveAfterReset}
+                onChange={(e) => setAutoSaveAfterReset(e.target.checked)}
               />
-              <button style={btnDark} type="button" disabled={busy} onClick={setRoundsTotal}>
-                Save
-              </button>
-            </div>
+              <span style={{ fontWeight: 900 }}>Auto-save to DB after reset</span>
+              <span style={{ fontSize: 12, opacity: 0.7 }}>(one-click “true reset”)</span>
+            </label>
 
-            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-              Current: <strong>{state?.rounds_total ?? "—"}</strong> rounds
-            </div>
+            {changedCount > 0 ? (
+              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
+                Pending: <strong>{changedCount}</strong> edited picks in UI • Save will write{" "}
+                <strong>{willWriteCount}</strong> picks for <strong>{block.label}</strong>
+              </div>
+            ) : null}
           </div>
 
-          {/* Coaches */}
-          <div style={card}>
-            <div style={{ fontSize: 15, fontWeight: 900, marginBottom: 10 }}>Coaches</div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => loadData(roomId.trim())}
+              disabled={editorLocked}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #222",
+                background: editorLocked ? "#eee" : "#fff",
+                fontWeight: 900,
+                cursor: editorLocked ? "not-allowed" : "pointer",
+              }}
+            >
+              Refresh
+            </button>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {coaches.length ? (
-                coaches.map((c) => (
-                  <div
-                    key={c.coach_id}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      gap: 10,
-                      padding: 10,
-                      border: "1px solid #eee",
-                      borderRadius: 12,
-                      background: "#fafafa",
-                    }}
-                  >
-                    <div style={{ fontWeight: 900 }}>{c.coach_name}</div>
-                    <div style={{ fontSize: 12, opacity: 0.75 }}>ID: {c.coach_id}</div>
-                  </div>
-                ))
-              ) : (
-                <div style={{ fontSize: 13, opacity: 0.7 }}>No coaches found for this room yet.</div>
-              )}
-            </div>
-          </div>
+            <button
+              type="button"
+              onClick={resetBlockToGenerated}
+              disabled={resetBusy || saveBusy || busy || !nCoaches}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #222",
+                background: resetBusy ? "#ddd" : "#fff",
+                fontWeight: 900,
+                cursor: resetBusy ? "not-allowed" : "pointer",
+              }}
+              title="Reset the editor back to the last saved/generated order for this block"
+            >
+              {resetBusy ? `Resetting ${block.label}...` : `Reset block (${block.label})`}
+            </button>
 
-          {/* Draft order */}
-          <div style={card}>
-            <div style={{ fontSize: 15, fontWeight: 900, marginBottom: 10 }}>Draft Order</div>
-
-            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>{orderSummary}</div>
-
-            <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid #eee", borderRadius: 12 }}>
-              {draftOrder.length ? (
-                draftOrder.map((r) => (
-                  <div
-                    key={r.overall_pick}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      padding: "10px 12px",
-                      borderBottom: "1px solid #f0f0f0",
-                    }}
-                  >
-                    <div style={{ fontWeight: 900 }}>Pick {r.overall_pick}</div>
-                    <div style={{ fontSize: 12, opacity: 0.8 }}>
-                      {coachNameById.get(r.coach_id) ?? `Coach ${r.coach_id}`}
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div style={{ padding: 12, fontSize: 13, opacity: 0.7 }}>No draft order rows yet.</div>
-              )}
-            </div>
-
-            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-              If you want a “Set Draft Order” UI (snake / custom), we can add it next.
-            </div>
+            <button
+              type="button"
+              onClick={saveManualEdits}
+              disabled={saveBusy || changedCount === 0 || resetBusy}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #222",
+                background: saveBusy || changedCount === 0 || resetBusy ? "#aaa" : "#111",
+                color: "#fff",
+                fontWeight: 900,
+                cursor: saveBusy || changedCount === 0 || resetBusy ? "not-allowed" : "pointer",
+              }}
+              title="Save the entire block to draft_order (snake regen mode)"
+            >
+              {saveBusy
+                ? "Saving..."
+                : changedCount === 0
+                ? `Save block (${block.label})`
+                : `Save block (${block.label}) • write ${willWriteCount}`}
+            </button>
           </div>
         </div>
 
-        <div style={{ fontSize: 12, opacity: 0.7 }}>
-          URL tips: <code>/admin?room=YOURROOM</code> • <code>/board?room=YOURROOM</code> •{" "}
-          <code>/draft?room=YOURROOM&amp;coach=1</code>
+        {loadErr ? (
+          <pre style={{ marginTop: 10, padding: 10, background: "#fff5f5", border: "1px solid #f2c2c2" }}>
+            {loadErr}
+          </pre>
+        ) : null}
+
+        {saveMsg ? <div style={{ marginTop: 10, fontWeight: 900 }}>{saveMsg}</div> : null}
+
+        {!coachOptions.length ? (
+          <div style={{ marginTop: 12, opacity: 0.85 }}>
+            No coach columns available yet. Add coaches for this room or generate at least one draft_order pick.
+          </div>
+        ) : !blockGrid ? (
+          <div style={{ marginTop: 12, opacity: 0.85 }}>Loading…</div>
+        ) : (
+          <div style={{ marginTop: 12, overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Round</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Pick</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Overall</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Coach</th>
+                </tr>
+              </thead>
+              <tbody>
+                {blockGrid.flatMap((r) =>
+                  r.cells.map((cell) => {
+                    const currentName =
+                      cell.coachId != null
+                        ? coachNameById.get(cell.coachId) ?? `Coach ${cell.coachId}`
+                        : "—";
+                    const edited = Object.prototype.hasOwnProperty.call(edits, cell.overallPick);
+
+                    return (
+                      <tr key={cell.overallPick} style={{ opacity: editorLocked ? 0.95 : 1 }}>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0", fontWeight: 900 }}>
+                          {cell.round}
+                        </td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0" }}>{cell.pickInRound}</td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0" }}>
+                          #{cell.overallPick}
+                        </td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0" }}>
+                          <select
+                            disabled={editorLocked}
+                            value={cell.coachId ?? ""}
+                            onChange={(e) => setCell(cell.overallPick, Number(e.target.value))}
+                            style={{
+                              width: "100%",
+                              padding: 8,
+                              borderRadius: 8,
+                              border: edited ? "2px solid #111" : "1px solid #ccc",
+                              background: editorLocked ? "#f3f3f3" : edited ? "#fff6d6" : "#fff",
+                              color: editorLocked ? "#777" : "#000",
+                              fontWeight: 800,
+                              cursor: editorLocked ? "not-allowed" : "pointer",
+                              opacity: editorLocked ? 0.85 : 1,
+                            }}
+                          >
+                            <option value="" disabled>
+                              Select coach…
+                            </option>
+                            {coachOptions.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}
+                              </option>
+                            ))}
+                          </select>
+
+                          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                            Current: <strong>{currentName}</strong>
+                            {edited ? " • edited" : ""}
+                            {editorLocked ? " • locked" : ""}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+
+            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
+              Tip: change any pick and the whole block is recalculated as a snake. Then hit{" "}
+              <strong>Save block</strong> to write it to <code>draft_order</code>. Use{" "}
+              <strong>Reset block</strong> to revert your unsaved edits (and auto-save if enabled).
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Live board preview */}
+      <div style={{ marginTop: 18 }}>
+        <div style={{ fontWeight: 900, marginBottom: 8 }}>
+          Live Draft Board Preview (room: <span style={{ fontFamily: "monospace" }}>{roomId.trim()}</span>)
         </div>
+        <DraftClient key={`${roomId.trim()}-${refreshKey}`} />
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabase";
 
@@ -25,21 +25,32 @@ type Player = {
   drafted_pick: number | null;
 };
 
-const POS_MAP: Record<string, string> = {
-  ALL: "All",
-  DEF: "DEF",
-  KD: "KD",
-  MID: "MID",
-  RUC: "RUC",
-  FWD: "FWD",
-  KF: "KF",
+type Coach = {
+  room_id: string;
+  coach_id: number;
+  coach_name: string;
+  session_id: string | null;
 };
 
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
+type DraftOrderRow = {
+  room_id: string;
+  overall_pick: number;
+  coach_id: number;
+};
 
-// Accepts "#rrggbb" and returns {r,g,b}
+const POS_TABS = ["ALL", "KD", "DEF", "MID", "FOR", "KF", "RUC"] as const;
+type PosTab = (typeof POS_TABS)[number];
+
+const POS_LABEL: Record<PosTab, string> = {
+  ALL: "All",
+  KD: "KD",
+  DEF: "DEF",
+  MID: "MID",
+  FOR: "FOR",
+  KF: "KF",
+  RUC: "RUC",
+};
+
 function hexToRgb(hex: string) {
   const h = hex.replace("#", "").trim();
   if (h.length !== 6) return { r: 255, g: 255, b: 255 };
@@ -49,10 +60,8 @@ function hexToRgb(hex: string) {
   return { r, g, b };
 }
 
-// Relative luminance (0..1)
 function luminanceFromHex(hex: string) {
   const { r, g, b } = hexToRgb(hex);
-  // sRGB -> linear
   const srgb = [r, g, b].map((v) => {
     const x = v / 255;
     return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
@@ -60,7 +69,6 @@ function luminanceFromHex(hex: string) {
   return 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
 }
 
-// Auto pick black/white text for any background
 function bestTextColor(bgHex: string) {
   const L = luminanceFromHex(bgHex);
   return L > 0.5 ? "#111" : "#fff";
@@ -75,8 +83,6 @@ function pauseReasonLabel(pause_reason: string | null) {
   return "Paused";
 }
 
-// --- Position helpers ---
-// supports "MID/FWD", "DEF", "KD", etc.
 function splitPos(posRaw: string): string[] {
   return (posRaw || "")
     .split("/")
@@ -84,61 +90,132 @@ function splitPos(posRaw: string): string[] {
     .filter(Boolean);
 }
 
-// The rules you asked for:
-// - DEF tab shows DEF players BUT not KD players
-// - FWD tab shows FWD players BUT not KF players
-// - KD tab only KD
-// - KF tab only KF
-// - MID tab includes MID (even if MID/FWD etc.)
-// - RUC tab includes RUC
-function matchesTab(player: Player, tab: string): boolean {
+function matchesTab(player: Player, tab: PosTab): boolean {
   const tags = splitPos(player.pos);
   if (tab === "ALL") return true;
 
   if (tab === "DEF") return tags.includes("DEF") && !tags.includes("KD");
-  if (tab === "FWD") return tags.includes("FWD") && !tags.includes("KF");
+  if (tab === "FOR") return tags.includes("FOR") && !tags.includes("KF");
 
   if (tab === "KD") return tags.includes("KD");
   if (tab === "KF") return tags.includes("KF");
 
-  // default: strict include (handles dual positions)
   return tags.includes(tab);
 }
+
+function norm(s: string) {
+  return (s || "").toLowerCase().trim();
+}
+
+function countByTag(list: Player[]) {
+  const counts: Record<string, number> = {};
+  for (const p of list) {
+    for (const t of splitPos(p.pos)) counts[t] = (counts[t] || 0) + 1;
+  }
+  return counts;
+}
+
+function formatSbError(err: any): string {
+  if (!err) return "";
+  const safe = {
+    message: err?.message,
+    details: err?.details,
+    hint: err?.hint,
+    code: err?.code,
+    status: err?.status,
+    name: err?.name,
+  };
+  try {
+    return JSON.stringify(safe, null, 2);
+  } catch {
+    return String(err);
+  }
+}
+
+type ConfirmState = {
+  open: boolean;
+  player: Player | null;
+};
 
 export default function DraftClient() {
   const sp = useSearchParams();
   const room = sp.get("room") || "DUMMY1";
-  const coachId = Number(sp.get("coach") || "1");
+  const coachId = Number(sp.get("coach") || "0");
 
   const [state, setState] = useState<DraftState | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
   const [busy, setBusy] = useState(false);
 
+  const [coaches, setCoaches] = useState<Coach[]>([]);
+  const [draftOrder, setDraftOrder] = useState<DraftOrderRow[]>([]);
+
+  // Errors (minimal top alert; no debug panel)
+  const [stateError, setStateError] = useState<string | null>(null);
+  const [playersError, setPlayersError] = useState<string | null>(null);
+  const [coachesError, setCoachesError] = useState<string | null>(null);
+  const [draftOrderError, setDraftOrderError] = useState<string | null>(null);
+
   // UI controls
-  const [posTab, setPosTab] = useState<string>("ALL");
+  const [posTab, setPosTab] = useState<PosTab>("ALL");
   const [sortKey, setSortKey] = useState<"player_no" | "player_name" | "club" | "average">(
     "player_no"
   );
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [search, setSearch] = useState("");
+  const [hideDrafted, setHideDrafted] = useState(true);
 
-  const loadState = async () => {
+  // Confirm modal
+  const [confirm, setConfirm] = useState<ConfirmState>({ open: false, player: null });
+  const [dontAskAgain, setDontAskAgain] = useState(false);
+  const [skipConfirm, setSkipConfirm] = useState(false);
+
+  const skipKey = useMemo(() => `super8_skip_confirm:${room}:${coachId}`, [room, coachId]);
+
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(skipKey);
+      setSkipConfirm(v === "1");
+    } catch {
+      setSkipConfirm(false);
+    }
+  }, [skipKey]);
+
+  // ---------------------------------------------------------
+  // ✅ PERFORMANCE FIXES
+  // - Use ONE realtime channel with multiple handlers
+  // - Debounce reloads so bursts of events don’t spam Supabase
+  // ---------------------------------------------------------
+  const timersRef = useRef<Record<string, any>>({});
+
+  function schedule(key: "state" | "players" | "coaches" | "order", fn: () => void, ms = 150) {
+    if (timersRef.current[key]) clearTimeout(timersRef.current[key]);
+    timersRef.current[key] = setTimeout(fn, ms);
+  }
+
+  async function loadState() {
+    setStateError(null);
+
     const { data, error } = await supabase
       .from("draft_state")
       .select(
         "room_id,is_paused,pause_reason,rounds_total,current_round,current_pick_in_round,current_coach_id"
       )
       .eq("room_id", room)
-      .single();
+      .maybeSingle();
 
     if (error) {
       console.error("draft loadState error:", error);
+      setStateError(formatSbError(error));
       setState(null);
-    } else {
-      setState(data as DraftState);
+      return;
     }
-  };
 
-  const loadPlayers = async () => {
+    setState((data as DraftState) || null);
+  }
+
+  async function loadPlayers() {
+    setPlayersError(null);
+
     const { data, error } = await supabase
       .from("players")
       .select("player_no,pos,club,player_name,average,drafted_by_coach_id,drafted_round,drafted_pick")
@@ -146,63 +223,192 @@ export default function DraftClient() {
 
     if (error) {
       console.error("draft loadPlayers error:", error);
+      setPlayersError(formatSbError(error));
       setPlayers([]);
     } else {
       setPlayers((data as Player[]) || []);
     }
-  };
+  }
+
+  async function loadCoaches() {
+    setCoachesError(null);
+
+    const { data, error } = await supabase
+      .from("coaches")
+      .select("room_id,coach_id,coach_name,session_id")
+      .eq("room_id", room)
+      .order("coach_id", { ascending: true });
+
+    if (error) {
+      console.error("draft loadCoaches error:", error);
+      setCoachesError(formatSbError(error));
+      setCoaches([]);
+    } else {
+      setCoaches((data as Coach[]) || []);
+    }
+  }
+
+  async function loadDraftOrder() {
+    setDraftOrderError(null);
+
+    const { data, error } = await supabase
+      .from("draft_order")
+      .select("room_id,overall_pick,coach_id")
+      .eq("room_id", room)
+      .order("overall_pick", { ascending: true });
+
+    if (error) {
+      console.error("draft loadDraftOrder error:", error);
+      setDraftOrderError(formatSbError(error));
+      setDraftOrder([]);
+    } else {
+      setDraftOrder((data as DraftOrderRow[]) || []);
+    }
+  }
+
+  async function initialLoad() {
+    await Promise.all([loadState(), loadPlayers(), loadCoaches(), loadDraftOrder()]);
+  }
 
   useEffect(() => {
-    loadState();
-    loadPlayers();
+    for (const k of Object.keys(timersRef.current)) clearTimeout(timersRef.current[k]);
+    timersRef.current = {};
 
-    const s1 = supabase
-      .channel(`draft_state_${room}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "draft_state", filter: `room_id=eq.${room}` },
-        () => loadState()
-      )
-      .subscribe();
+    initialLoad();
 
-    const s2 = supabase
-      .channel(`draft_players_${room}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "players", filter: `room_id=eq.${room}` },
-        () => loadPlayers()
-      )
-      .subscribe();
+    const ch = supabase.channel(`draft_room_${room}`);
 
-    // Poll fallback
-    const poll = setInterval(() => {
-      loadState();
-      loadPlayers();
-    }, 1000);
+    ch.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "draft_state", filter: `room_id=eq.${room}` },
+      () => schedule("state", loadState, 120)
+    );
+
+    ch.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "players", filter: `room_id=eq.${room}` },
+      () => schedule("players", loadPlayers, 250)
+    );
+
+    ch.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "coaches", filter: `room_id=eq.${room}` },
+      () => schedule("coaches", loadCoaches, 200)
+    );
+
+    ch.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "draft_order", filter: `room_id=eq.${room}` },
+      () => schedule("order", loadDraftOrder, 200)
+    );
+
+    ch.subscribe();
 
     return () => {
-      supabase.removeChannel(s1);
-      supabase.removeChannel(s2);
-      clearInterval(poll);
+      supabase.removeChannel(ch);
+      for (const k of Object.keys(timersRef.current)) clearTimeout(timersRef.current[k]);
+      timersRef.current = {};
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room]);
 
+  // ---------- Helpers derived from data ----------
+  const inferredCoachIds = useMemo(() => {
+    const s = new Set<number>();
+    for (const row of draftOrder) s.add(row.coach_id);
+    return Array.from(s).sort((a, b) => a - b);
+  }, [draftOrder]);
+
+  const coachColumns = useMemo(() => {
+    if (coaches.length > 0) {
+      return [...coaches].sort((a, b) => a.coach_id - b.coach_id).map((c) => ({
+        coach_id: c.coach_id,
+        coach_name: c.coach_name,
+      }));
+    }
+    return inferredCoachIds.map((id) => ({
+      coach_id: id,
+      coach_name: `Coach ${id}`,
+    }));
+  }, [coaches, inferredCoachIds]);
+
+  const coachNameById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const c of coachColumns) m.set(c.coach_id, c.coach_name);
+    return m;
+  }, [coachColumns]);
+
+  const nCoaches = coachColumns.length || 0;
+
+  function overallPick(round: number, pickInRound: number) {
+    if (!nCoaches) return 0;
+    return (round - 1) * nCoaches + pickInRound;
+  }
+
+  const roundsTotal = useMemo(() => {
+    if (state?.rounds_total) return state.rounds_total;
+    if (!draftOrder.length || !nCoaches) return 0;
+    const maxPick = draftOrder[draftOrder.length - 1]?.overall_pick ?? 0;
+    return Math.ceil(maxPick / nCoaches);
+  }, [state, draftOrder, nCoaches]);
+
+  const draftOrderByPick = useMemo(() => {
+    const m = new Map<number, number>(); // overall_pick -> coach_id
+    for (const row of draftOrder) m.set(row.overall_pick, row.coach_id);
+    return m;
+  }, [draftOrder]);
+
+  const draftedByOverall = useMemo(() => {
+    const m = new Map<number, Player>();
+    if (!nCoaches) return m;
+    for (const p of players) {
+      if (p.drafted_round && p.drafted_pick) {
+        const ov = overallPick(p.drafted_round, p.drafted_pick);
+        if (ov > 0) m.set(ov, p);
+      }
+    }
+    return m;
+  }, [players, nCoaches]);
+
   const isMyTurn = !!state && !state.is_paused && state.current_coach_id === coachId;
 
   const topBar = useMemo(() => {
-    if (!state) return `Room ${room} • Loading…`;
+    if (!state) return `Room ${room} • (No draft_state row yet OR not started)`;
     const live = state.is_paused ? "PAUSED" : "LIVE";
     return `Room ${room} • Round ${state.current_round}/${state.rounds_total} • Pick ${state.current_pick_in_round} • ${live}`;
   }, [state, room]);
 
-  const available = useMemo(() => players.filter((p) => p.drafted_by_coach_id == null), [players]);
+  // ---------- Tabs back/forward ----------
+  const tabIdx = useMemo(() => POS_TABS.indexOf(posTab), [posTab]);
+
+  function prevTab() {
+    const i = tabIdx <= 0 ? POS_TABS.length - 1 : tabIdx - 1;
+    setPosTab(POS_TABS[i]);
+  }
+
+  function nextTab() {
+    const i = tabIdx >= POS_TABS.length - 1 ? 0 : tabIdx + 1;
+    setPosTab(POS_TABS[i]);
+  }
+
+  // ---------- Players list ----------
+  const baseList = useMemo(() => {
+    return hideDrafted ? players.filter((p) => p.drafted_by_coach_id == null) : players;
+  }, [players, hideDrafted]);
 
   const filtered = useMemo(() => {
-    let list = available;
-
-    // ✅ new smarter filter (supports dual pos + your KD/KF rules)
+    let list = baseList;
     list = list.filter((p) => matchesTab(p, posTab));
+
+    const q = norm(search);
+    if (q) {
+      list = list.filter((p) => {
+        const hay = [String(p.player_no), p.player_name, p.club, p.pos, String(p.average ?? "")]
+          .map(norm)
+          .join(" | ");
+        return hay.includes(q);
+      });
+    }
 
     list = list.slice().sort((a, b) => {
       const dir = sortDir === "asc" ? 1 : -1;
@@ -213,8 +419,9 @@ export default function DraftClient() {
     });
 
     return list;
-  }, [available, posTab, sortKey, sortDir]);
+  }, [baseList, posTab, search, sortKey, sortDir]);
 
+  // ---------- My picks / sheet ----------
   const myPicks = useMemo(() => {
     return players
       .filter((p) => p.drafted_by_coach_id === coachId && p.drafted_round && p.drafted_pick)
@@ -222,31 +429,81 @@ export default function DraftClient() {
       .sort((a, b) => (a.drafted_round! - b.drafted_round!) || (a.drafted_pick! - b.drafted_pick!));
   }, [players, coachId]);
 
-  // Simple “My Draft Sheet” slots (46) – shows what you’ve picked so far
   const myDraftSheet = useMemo(() => {
-    const roundsTotal = state?.rounds_total ?? 46;
-    const slots = Array.from({ length: roundsTotal }, (_, i) => i + 1);
+    const rt = state?.rounds_total ?? 46;
+    const slots = Array.from({ length: rt }, (_, i) => i + 1);
     return slots.map((slotNo) => {
       const assigned = myPicks[slotNo - 1] || null;
-      return {
-        slotNo,
-        displayPosition: assigned ? assigned.pos : "",
-        assigned,
-      };
+      return { slotNo, displayPosition: assigned ? assigned.pos : "", assigned };
     });
   }, [myPicks, state]);
 
+  // ---------- Analytics ----------
+  const analytics = useMemo(() => {
+    const total = players.length;
+    const available = players.filter((p) => p.drafted_by_coach_id == null);
+    const drafted = total - available.length;
+    return {
+      total,
+      available: available.length,
+      drafted,
+      myPicks: myPicks.length,
+      posCountsAll: countByTag(players),
+      posCountsAvail: countByTag(available),
+    };
+  }, [players, myPicks]);
+
   const toggleSort = (key: typeof sortKey) => {
-    if (key === sortKey) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
+    if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
       setSortKey(key);
       setSortDir("asc");
     }
   };
 
-  const draftPlayer = async (p: Player) => {
-    if (!state) return;
+  // ---------- Mini draft board: current + next round only ----------
+  const miniBoard = useMemo(() => {
+    if (!nCoaches || !roundsTotal) return null;
+
+    const curRound = state?.current_round ?? 1;
+    const r1 = curRound;
+    const r2 = Math.min(curRound + 1, roundsTotal);
+
+    const roundsToShow = r1 === r2 ? [r1] : [r1, r2];
+
+    const rows = roundsToShow.map((round) => {
+      const direction = round % 2 === 1 ? "→" : "←";
+
+      const cells = Array.from({ length: nCoaches }, (_, j) => {
+        const pickInRound = j + 1;
+        const ov = overallPick(round, pickInRound);
+
+        const cid = draftOrderByPick.get(ov) ?? null;
+        const cname = cid != null ? (coachNameById.get(cid) ?? `Coach ${cid}`) : "—";
+
+        const drafted = draftedByOverall.get(ov) ?? null;
+
+        const isCurrent =
+          !!state &&
+          !state.is_paused &&
+          state.current_round === round &&
+          state.current_pick_in_round === pickInRound;
+
+        return { round, pickInRound, overall: ov, coach_name: cname, drafted, isCurrent };
+      });
+
+      return { round, direction, cells };
+    });
+
+    return { rows };
+  }, [nCoaches, roundsTotal, state, draftOrderByPick, coachNameById, draftedByOverall]);
+
+  // ---------- Draft actions ----------
+  async function doDraft(p: Player) {
+    if (!state) {
+      alert("Draft not started yet (no draft_state row).");
+      return;
+    }
     if (state.is_paused) {
       alert(pauseReasonLabel(state.pause_reason) ?? "Draft is paused.");
       return;
@@ -256,6 +513,7 @@ export default function DraftClient() {
       return;
     }
     if (busy) return;
+    if (p.drafted_by_coach_id != null) return;
 
     setBusy(true);
 
@@ -268,7 +526,7 @@ export default function DraftClient() {
 
     if (error) {
       console.error("draft draft_pick RPC error:", error);
-      alert("Draft failed: " + error.message);
+      alert("Draft failed: " + (error?.message ?? "Unknown error"));
       setBusy(false);
       return;
     }
@@ -281,43 +539,307 @@ export default function DraftClient() {
     }
 
     setBusy(false);
-    // state + players will refresh via realtime/poll
+  }
+
+  function requestDraft(p: Player) {
+    if (p.drafted_by_coach_id != null) return;
+
+    if (!state) {
+      alert("Draft not started yet (no draft_state row).");
+      return;
+    }
+    if (state.is_paused) {
+      alert(pauseReasonLabel(state.pause_reason) ?? "Draft is paused.");
+      return;
+    }
+    if (!isMyTurn) {
+      alert("Not your turn.");
+      return;
+    }
+    if (busy) return;
+
+    if (skipConfirm) {
+      void doDraft(p);
+      return;
+    }
+
+    setDontAskAgain(false);
+    setConfirm({ open: true, player: p });
+  }
+
+  function closeConfirm() {
+    setConfirm({ open: false, player: null });
+    setDontAskAgain(false);
+  }
+
+  async function confirmDraftNow() {
+    const p = confirm.player;
+    if (!p) return;
+
+    if (dontAskAgain) {
+      try {
+        localStorage.setItem(skipKey, "1");
+        setSkipConfirm(true);
+      } catch {
+        // ignore
+      }
+    }
+
+    closeConfirm();
+    await doDraft(p);
+  }
+
+  // ---------- Styles ----------
+  const availablePanelBg = "#2f2f2f";
+  const availableText = bestTextColor(availablePanelBg);
+
+  const chipStyle: React.CSSProperties = {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 10,
+    padding: "10px 12px",
+    border: "1px solid #eee",
+    borderRadius: 12,
+    background: "#fafafa",
+    fontWeight: 800,
+    fontSize: 13,
   };
 
-  // --- Styling: smart text colour for the Available panel ---
-  // You can tweak this base background as you like:
-  const availablePanelBg = "#2f2f2f"; // dark panel
-  const availableText = bestTextColor(availablePanelBg);
+  const card: React.CSSProperties = {
+    border: "1px solid #ddd",
+    borderRadius: 12,
+    padding: 12,
+    background: "#fff",
+  };
+
+  const subtle: React.CSSProperties = { fontSize: 12, opacity: 0.75 };
+
+  const anyError = stateError || playersError || coachesError || draftOrderError;
 
   return (
     <div style={{ padding: 16 }}>
-      <div style={{ padding: 12, border: "1px solid #ddd", marginBottom: 12 }}>
-        <strong>{topBar}</strong>
-        <div style={{ marginTop: 6, color: isMyTurn ? "green" : "#555" }}>
-          {state?.is_paused
-            ? pauseReasonLabel(state.pause_reason) ?? "Waiting (Admin hasn’t started the draft yet)…"
-            : isMyTurn
-            ? "You are ON THE CLOCK"
-            : "Waiting for your turn…"}
+      {/* Top status */}
+      <div style={{ padding: 12, border: "1px solid #ddd", marginBottom: 12, borderRadius: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <strong>{topBar}</strong>
+            <div style={{ marginTop: 6, color: isMyTurn ? "green" : "#555", fontWeight: 800 }}>
+              {state?.is_paused
+                ? pauseReasonLabel(state.pause_reason) ?? "Waiting (Admin hasn’t started the draft yet)…"
+                : isMyTurn
+                ? "You are ON THE CLOCK"
+                : "Waiting for your turn…"}
+            </div>
+            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
+              Room: <strong>{room}</strong> • Coach: <strong>{coachId}</strong>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <a
+              href={`/board?room=${encodeURIComponent(room)}`}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #222",
+                background: "#fff",
+                fontWeight: 900,
+                textDecoration: "none",
+                color: "#111",
+              }}
+            >
+              Open Board →
+            </a>
+
+            <a
+              href={`/admin?room=${encodeURIComponent(room)}`}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #222",
+                background: "#111",
+                fontWeight: 900,
+                textDecoration: "none",
+                color: "#fff",
+              }}
+            >
+              Admin →
+            </a>
+          </div>
+        </div>
+
+        {/* Big ON THE CLOCK banner */}
+        {state && !state.is_paused && isMyTurn ? (
+          <div
+            style={{
+              marginTop: 12,
+              padding: "14px 16px",
+              borderRadius: 14,
+              border: "2px solid #111",
+              background: "linear-gradient(90deg, #ffe08a, #fff6d6)",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ fontSize: 22, fontWeight: 1000, letterSpacing: 0.4 }}>⏱️ ON THE CLOCK</div>
+            <div style={{ fontWeight: 900 }}>
+              Pick:{" "}
+              <span style={{ fontFamily: "monospace" }}>
+                {state.current_round}.{state.current_pick_in_round}
+              </span>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Minimal error indicator */}
+        {anyError ? (
+          <div
+            style={{
+              marginTop: 10,
+              padding: 10,
+              borderRadius: 12,
+              border: "1px solid #f2c2c2",
+              background: "#fff5f5",
+              color: "#7a1d1d",
+              fontWeight: 800,
+              fontSize: 13,
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            There are loading errors. (Check console for details.)
+          </div>
+        ) : null}
+      </div>
+
+      {/* Mini board only (layout test) */}
+      <div style={{ marginBottom: 12 }}>
+        <div style={card}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ fontWeight: 1000 }}>Mini Draft Board</div>
+            <div style={subtle}>
+              Showing: <strong>current</strong> + <strong>next</strong> round
+            </div>
+          </div>
+
+          {!miniBoard ? (
+            <div style={{ marginTop: 10, opacity: 0.8 }}>
+              Waiting for draft data… (need coaches + draft_order + rounds_total)
+            </div>
+          ) : (
+            <div style={{ marginTop: 10, overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Round</th>
+                    {Array.from({ length: nCoaches || 0 }, (_, i) => (
+                      <th key={i} style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>
+                        Pick {i + 1}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {miniBoard.rows.map((r) => (
+                    <tr key={r.round}>
+                      <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0", fontWeight: 1000 }}>
+                        {r.round} <span style={{ opacity: 0.6 }}>{r.direction}</span>
+                      </td>
+
+                      {r.cells.map((c) => (
+                        <td
+                          key={c.overall}
+                          style={{
+                            padding: 8,
+                            borderBottom: "1px solid #f0f0f0",
+                            background: c.isCurrent ? "#fff6d6" : undefined,
+                            outline: c.isCurrent ? "2px solid #d3a200" : "1px solid transparent",
+                            verticalAlign: "top",
+                            minWidth: 160,
+                          }}
+                          title={`Overall #${c.overall} • ${c.coach_name}`}
+                        >
+                          <div style={{ fontWeight: 1000 }}>{c.coach_name}</div>
+                          <div style={{ fontSize: 12, opacity: 0.8 }}>Overall #{c.overall}</div>
+                          {c.drafted ? (
+                            <div style={{ marginTop: 4, fontSize: 12 }}>
+                              <strong>{c.drafted.player_name}</strong>
+                              <div style={{ opacity: 0.8 }}>
+                                #{c.drafted.player_no} • {c.drafted.pos} • {c.drafted.club}
+                              </div>
+                            </div>
+                          ) : (
+                            <div style={{ marginTop: 4, fontSize: 12, opacity: 0.45 }}>—</div>
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
 
+      {/* Players / Analytics / Draft Sheet */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        {/* LEFT: Available Players */}
+        {/* Players */}
         <div
           style={{
             border: "1px solid #ddd",
             padding: 12,
-            background: availablePanelBg,
+            background: "#2f2f2f",
             color: availableText,
             borderRadius: 10,
           }}
         >
-          <h2 style={{ marginTop: 0, color: availableText }}>Available Players</h2>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+            <h2 style={{ marginTop: 0, marginBottom: 0, color: availableText }}>Players</h2>
+
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={prevTab}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 10,
+                  border: "1px solid #444",
+                  background: "#1f1f1f",
+                  color: availableText,
+                  fontWeight: 900,
+                  cursor: "pointer",
+                }}
+                title="Previous position tab"
+              >
+                ←
+              </button>
+
+              <button
+                type="button"
+                onClick={nextTab}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 10,
+                  border: "1px solid #444",
+                  background: "#1f1f1f",
+                  color: availableText,
+                  fontWeight: 900,
+                  cursor: "pointer",
+                }}
+                title="Next position tab"
+              >
+                →
+              </button>
+            </div>
+          </div>
 
           {/* Tabs */}
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-            {Object.keys(POS_MAP).map((k) => {
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10, marginBottom: 10 }}>
+            {POS_TABS.map((k) => {
               const active = posTab === k;
               const bg = active ? "#555" : "#1f1f1f";
               const fg = bestTextColor(bg);
@@ -330,146 +852,338 @@ export default function DraftClient() {
                     border: "none",
                     borderRadius: 6,
                     cursor: "pointer",
-                    fontWeight: 700,
+                    fontWeight: 900,
                     background: bg,
                     color: fg,
                     boxShadow: active ? "inset 0 0 0 2px #aaa" : "inset 0 0 0 1px #444",
                   }}
                   onClick={() => setPosTab(k)}
+                  type="button"
                 >
-                  {POS_MAP[k]}
+                  {POS_LABEL[k]}
                 </button>
               );
             })}
           </div>
 
-          {/* Sort controls */}
+          {/* Controls */}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search name / club / # / pos…"
+              style={{
+                flex: 1,
+                minWidth: 220,
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #444",
+                background: "#1f1f1f",
+                color: availableText,
+                outline: "none",
+                fontWeight: 800,
+              }}
+            />
+
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #444",
+                background: "#1f1f1f",
+                color: availableText,
+                fontWeight: 900,
+                cursor: "pointer",
+              }}
+            >
+              Clear
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setHideDrafted((v) => !v)}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #444",
+                background: hideDrafted ? "#111" : "#1f1f1f",
+                color: availableText,
+                fontWeight: 1000,
+                cursor: "pointer",
+              }}
+              title="Toggle drafted players visibility"
+            >
+              {hideDrafted ? "Available only" : "Show drafted"}
+            </button>
+          </div>
+
+          {/* Sort row */}
           <div style={{ display: "flex", gap: 10, fontSize: 12, marginBottom: 10, color: availableText }}>
-            <span>Sort:</span>
+            <span style={{ opacity: 0.8 }}>Sort:</span>
             <button onClick={() => toggleSort("player_no")}>ID</button>
             <button onClick={() => toggleSort("player_name")}>Name</button>
             <button onClick={() => toggleSort("club")}>Club</button>
             <button onClick={() => toggleSort("average")}>Average</button>
             <span style={{ opacity: 0.7 }}>
-              ({sortKey} {sortDir})
+              ({sortKey} {sortDir}) • showing <strong>{filtered.length}</strong>
             </span>
           </div>
 
-          {/* Available list */}
-          <div
-            style={{
-              maxHeight: 520,
-              overflowY: "auto",
-              borderTop: "1px solid rgba(255,255,255,0.12)",
-            }}
-          >
-            {filtered.map((p) => (
-              <div
-                key={p.player_no}
-                style={{
-                  padding: 10,
-                  borderBottom: "1px solid rgba(255,255,255,0.08)",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: 10,
-                }}
-              >
-                <div style={{ color: availableText }}>
-                  <div>
-                    <strong style={{ color: availableText }}>{p.player_no}</strong> — {p.player_name}
-                  </div>
-                  <div style={{ fontSize: 12, opacity: 0.8 }}>
-                    {p.club} • {p.pos} • Avg {p.average}
-                  </div>
-                </div>
+          {/* Player list (clickable rows) */}
+          <div style={{ maxHeight: 520, overflowY: "auto", borderTop: "1px solid rgba(255,255,255,0.12)" }}>
+            {filtered.map((p) => {
+              const disabled = !isMyTurn || busy || p.drafted_by_coach_id != null || !!state?.is_paused;
 
-                <button
-                  disabled={!isMyTurn || busy}
-                  onClick={() => draftPlayer(p)}
-                  style={{
-                    padding: "8px 12px",
-                    borderRadius: 8,
-                    border: "1px solid #222",
-                    cursor: !isMyTurn || busy ? "not-allowed" : "pointer",
-                    background: !isMyTurn || busy ? "#999" : "#fff",
-                    color: !isMyTurn || busy ? "#333" : "#000",
-                    fontWeight: 800,
-                    whiteSpace: "nowrap",
+              return (
+                <div
+                  key={p.player_no}
+                  onClick={() => {
+                    if (!disabled) requestDraft(p);
                   }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      if (!disabled) requestDraft(p);
+                    }
+                  }}
+                  style={{
+                    padding: 10,
+                    borderBottom: "1px solid rgba(255,255,255,0.08)",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 10,
+                    cursor: disabled ? "not-allowed" : "pointer",
+                    opacity: disabled ? 0.7 : 1,
+                    userSelect: "none",
+                  }}
+                  title={disabled ? "Draft disabled (not your turn / paused / busy / already drafted)" : "Click to draft"}
                 >
-                  Draft
-                </button>
-              </div>
-            ))}
+                  <div style={{ color: availableText }}>
+                    <div>
+                      <strong style={{ color: availableText }}>{p.player_no}</strong> — {p.player_name}
+                    </div>
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>
+                      {p.club} • {p.pos} • Avg {p.average}
+                    </div>
+                  </div>
+
+                  <button
+                    disabled={disabled}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!disabled) requestDraft(p);
+                    }}
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: 8,
+                      border: "1px solid #222",
+                      cursor: disabled ? "not-allowed" : "pointer",
+                      background: disabled ? "#999" : "#fff",
+                      color: disabled ? "#333" : "#000",
+                      fontWeight: 900,
+                      whiteSpace: "nowrap",
+                    }}
+                    type="button"
+                  >
+                    Draft
+                  </button>
+                </div>
+              );
+            })}
 
             {filtered.length === 0 ? (
               <div style={{ padding: 12, opacity: 0.8, color: availableText }}>
-                No players found for {POS_MAP[posTab] ?? posTab}.
+                No players found for {POS_LABEL[posTab]}
+                {search ? ` with “${search}”` : ""}.
               </div>
             ) : null}
           </div>
         </div>
 
-        {/* RIGHT: My Draft Sheet */}
-        <div style={{ border: "1px solid #ddd", padding: 12, borderRadius: 10 }}>
-          <h2 style={{ marginTop: 0 }}>My Draft Sheet</h2>
+        {/* Right side: analytics + my sheet */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Analytics */}
+          <div style={{ border: "1px solid #ddd", padding: 12, borderRadius: 10, background: "#fff" }}>
+            <h2 style={{ marginTop: 0 }}>Analytics</h2>
 
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>
-                    Slot #
-                  </th>
-                  <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>
-                    Position
-                  </th>
-                  <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>
-                    Player #
-                  </th>
-                  <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>
-                    Player
-                  </th>
-                  <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>
-                    Club
-                  </th>
-                  <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>
-                    Pick #
-                  </th>
-                </tr>
-              </thead>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={chipStyle}><span>Total</span><span>{analytics.total}</span></div>
+              <div style={chipStyle}><span>Available</span><span>{analytics.available}</span></div>
+              <div style={chipStyle}><span>Drafted</span><span>{analytics.drafted}</span></div>
+              <div style={chipStyle}><span>My Picks</span><span>{analytics.myPicks}</span></div>
+            </div>
 
-              <tbody>
-                {myDraftSheet.map((s) => (
-                  <tr key={s.slotNo}>
-                    <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>{s.slotNo}</td>
-                    <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>{s.displayPosition}</td>
-                    <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>
-                      {s.assigned ? s.assigned.player_no : ""}
-                    </td>
-                    <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>
-                      {s.assigned ? s.assigned.player_name : ""}
-                    </td>
-                    <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>
-                      {s.assigned ? s.assigned.club : ""}
-                    </td>
-                    <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>
-                      {s.assigned && s.assigned.drafted_round && s.assigned.drafted_pick
-                        ? `${s.assigned.drafted_round}.${s.assigned.drafted_pick}`
-                        : ""}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div style={{ marginTop: 12, fontWeight: 1000, fontSize: 13, opacity: 0.8 }}>
+              Position counts (Available / Total)
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+              {(["KD", "DEF", "MID", "FOR", "KF", "RUC"] as const).map((tag) => (
+                <div key={tag} style={chipStyle}>
+                  <span>{tag}</span>
+                  <span>
+                    {analytics.posCountsAvail[tag] ?? 0} / {analytics.posCountsAll[tag] ?? 0}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
+              Note: counts use your actual <code>pos</code> tags (supports dual like MID/FOR).
+            </div>
           </div>
 
-          <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-            Slots shown = {state?.rounds_total ?? 46}
+          {/* My Draft Sheet */}
+          <div style={{ border: "1px solid #ddd", padding: 12, borderRadius: 10 }}>
+            <h2 style={{ marginTop: 0 }}>My Draft Sheet</h2>
+
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>Slot #</th>
+                    <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>Position</th>
+                    <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>Player #</th>
+                    <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>Player</th>
+                    <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>Club</th>
+                    <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>Pick #</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {myDraftSheet.map((s) => (
+                    <tr key={s.slotNo}>
+                      <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>{s.slotNo}</td>
+                      <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>{s.displayPosition}</td>
+                      <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>
+                        {s.assigned ? s.assigned.player_no : ""}
+                      </td>
+                      <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>
+                        {s.assigned ? s.assigned.player_name : ""}
+                      </td>
+                      <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>
+                        {s.assigned ? s.assigned.club : ""}
+                      </td>
+                      <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>
+                        {s.assigned && s.assigned.drafted_round && s.assigned.drafted_pick
+                          ? `${s.assigned.drafted_round}.${s.assigned.drafted_pick}`
+                          : ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
+              Slots shown = {state?.rounds_total ?? 46}
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Confirm modal */}
+      {confirm.open && confirm.player ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            zIndex: 1000,
+          }}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) closeConfirm();
+          }}
+        >
+          <div
+            style={{
+              width: "min(520px, 100%)",
+              borderRadius: 16,
+              background: "#fff",
+              border: "1px solid #e5e7eb",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+              padding: 16,
+            }}
+          >
+            <div style={{ fontWeight: 1000, fontSize: 18 }}>Confirm Draft</div>
+
+            <div
+              style={{
+                marginTop: 10,
+                padding: 12,
+                borderRadius: 12,
+                background: "#f9fafb",
+                border: "1px solid #e5e7eb",
+              }}
+            >
+              <div style={{ fontWeight: 1000, fontSize: 16 }}>
+                #{confirm.player.player_no} — {confirm.player.player_name}
+              </div>
+              <div style={{ marginTop: 6, fontSize: 13, opacity: 0.85 }}>
+                {confirm.player.club} • {confirm.player.pos} • Avg {confirm.player.average}
+              </div>
+            </div>
+
+            <label style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
+              <input
+                type="checkbox"
+                checked={dontAskAgain}
+                onChange={(e) => setDontAskAgain(e.target.checked)}
+              />
+              <span style={{ fontWeight: 900 }}>Don’t ask again on this device</span>
+            </label>
+
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 14, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => closeConfirm()}
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid #222",
+                  background: "#fff",
+                  fontWeight: 900,
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void confirmDraftNow()}
+                disabled={busy}
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid #222",
+                  background: busy ? "#aaa" : "#111",
+                  color: "#fff",
+                  fontWeight: 1000,
+                  cursor: busy ? "not-allowed" : "pointer",
+                }}
+              >
+                {busy ? "Drafting..." : "Confirm Draft"}
+              </button>
+            </div>
+
+            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.65 }}>
+              Tip: This prevents misclick drafts.
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
