@@ -28,5 +28,22 @@ export async function generateMetadata({
 }
 
 export default function Page() {
-  return <AdminClient />;
+  const sha = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "local";
+
+  return (
+    <>
+      <div
+        style={{
+          padding: 8,
+          fontFamily: "monospace",
+          fontSize: 12,
+          opacity: 0.7,
+        }}
+      >
+        admin build: {sha}
+      </div>
+
+      <AdminClient />
+    </>
+  );
 }
