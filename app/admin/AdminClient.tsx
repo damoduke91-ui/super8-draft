@@ -5,6 +5,16 @@ import { useSearchParams, useRouter } from "next/navigation";
 import DraftClient from "../draft/DraftClient";
 import { supabase } from "../lib/supabase";
 
+type DraftState = {
+  room_id: string;
+  is_paused: boolean;
+  pause_reason: string | null;
+  rounds_total: number;
+  current_round: number;
+  current_pick_in_round: number;
+  current_coach_id: number;
+};
+
 type Coach = {
   room_id: string;
   coach_id: number;
@@ -26,6 +36,25 @@ const BLOCKS = [
   { label: "Rounds 31–40", from: 31, to: 40 },
   { label: "Rounds 41–46", from: 41, to: 46 },
 ] as const;
+
+function pauseReasonLabel(pause_reason: string | null) {
+  if (!pause_reason) return null;
+  if (pause_reason.startsWith("WAIT_BLOCK_")) {
+    const block = pause_reason.replace("WAIT_BLOCK_", "");
+    return `Waiting for Admin to set draft order for rounds ${block}…`;
+  }
+  return pause_reason;
+}
+
+async function postJson(url: string, body: any) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  return { res, json };
+}
 
 export default function AdminClient() {
   const sp = useSearchParams();
@@ -56,18 +85,172 @@ export default function AdminClient() {
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
 
-  // reset button busy
+  // reset block button busy
   const [resetBusy, setResetBusy] = useState(false);
 
   // ✅ pro toggle
   const [autoSaveAfterReset, setAutoSaveAfterReset] = useState(true);
 
-  // force refresh of embedded DraftClient after save/generate
+  // force refresh of embedded DraftClient after save/generate/admin actions
   const [refreshKey, setRefreshKey] = useState(0);
 
   const block = BLOCKS[blockIdx];
 
+  // =========================================================
+  // ✅ Draft controls (Start / Pause / Reset)
+  // =========================================================
+
+  const [draftState, setDraftState] = useState<DraftState | null>(null);
+  const [draftStateErr, setDraftStateErr] = useState<string>("");
+  const [draftActionBusy, setDraftActionBusy] = useState(false);
+  const [draftActionMsg, setDraftActionMsg] = useState<string>("");
+
+  async function loadDraftState(room: string) {
+    setDraftStateErr("");
+    if (!room.trim()) {
+      setDraftState(null);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("draft_state")
+      .select(
+        "room_id,is_paused,pause_reason,rounds_total,current_round,current_pick_in_round,current_coach_id"
+      )
+      .eq("room_id", room.trim())
+      .maybeSingle();
+
+    if (error) {
+      setDraftStateErr(`draft_state load error: ${error.message}`);
+      setDraftState(null);
+      return;
+    }
+
+    setDraftState((data as DraftState) || null);
+  }
+
+  useEffect(() => {
+    // live subscribe for the current room
+    if (!roomId.trim()) return;
+
+    loadDraftState(roomId.trim());
+
+    const ch = supabase.channel(`admin_draft_state_${roomId.trim()}`);
+    ch.on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "draft_state", filter: `room_id=eq.${roomId.trim()}` },
+      () => loadDraftState(roomId.trim())
+    );
+    ch.subscribe();
+
+    return () => {
+      supabase.removeChannel(ch);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
+
+  async function startDraft() {
+    setDraftActionMsg("");
+    if (!roomId.trim()) return setDraftActionMsg("Room id is required.");
+
+    const ok = window.confirm(
+      `Start draft for room "${roomId.trim()}"?\n\nThis should create/initialize draft_state if needed and set draft LIVE.`
+    );
+    if (!ok) return;
+
+    setDraftActionBusy(true);
+    try {
+      // ✅ FIX: API expects roomId (not room_id)
+      const { res, json } = await postJson("/api/admin/start-draft", { roomId: roomId.trim() });
+
+      if (!res.ok || !json?.ok) {
+        setDraftActionMsg(`Start failed: ${json?.error || json?.message || "Unknown error"}`);
+      } else {
+        setDraftActionMsg("✅ Draft started");
+        await loadDraftState(roomId.trim());
+        setRefreshKey((k) => k + 1);
+      }
+    } catch (e: any) {
+      setDraftActionMsg(`Start failed: ${e?.message || String(e)}`);
+    } finally {
+      setDraftActionBusy(false);
+    }
+  }
+
+  async function pauseDraft(nextPaused: boolean) {
+    setDraftActionMsg("");
+    if (!roomId.trim()) return setDraftActionMsg("Room id is required.");
+
+    const ok = window.confirm(
+      nextPaused
+        ? `Pause draft for room "${roomId.trim()}"?`
+        : `Resume draft for room "${roomId.trim()}"?`
+    );
+    if (!ok) return;
+
+    setDraftActionBusy(true);
+    try {
+      // ✅ FIX: send roomId and pause/resume fields expected by the route replacement below
+      const { res, json } = await postJson("/api/admin/pause-draft", {
+        roomId: roomId.trim(),
+        is_paused: nextPaused,
+        pause_reason: nextPaused ? "Paused by Admin" : null,
+      });
+
+      if (!res.ok || !json?.ok) {
+        setDraftActionMsg(`Pause/resume failed: ${json?.error || json?.message || "Unknown error"}`);
+      } else {
+        setDraftActionMsg(nextPaused ? "⏸️ Draft paused" : "▶️ Draft resumed");
+        await loadDraftState(roomId.trim());
+        setRefreshKey((k) => k + 1);
+      }
+    } catch (e: any) {
+      setDraftActionMsg(`Pause/resume failed: ${e?.message || String(e)}`);
+    } finally {
+      setDraftActionBusy(false);
+    }
+  }
+
+  async function resetDraft() {
+    setDraftActionMsg("");
+    if (!roomId.trim()) return setDraftActionMsg("Room id is required.");
+
+    const ok = window.confirm(
+      `RESET draft for room "${roomId.trim()}"?\n\nThis should reset draft_state + clear drafted players (depending on your RPC/route).\n\nThis cannot be undone.`
+    );
+    if (!ok) return;
+
+    setDraftActionBusy(true);
+    try {
+      // ✅ FIX: API expects roomId (not room_id)
+      const { res, json } = await postJson("/api/admin/reset-draft", { roomId: roomId.trim() });
+
+      if (!res.ok || !json?.ok) {
+        setDraftActionMsg(`Reset failed: ${json?.error || json?.message || "Unknown error"}`);
+      } else {
+        setDraftActionMsg("♻️ Draft reset");
+        await loadDraftState(roomId.trim());
+        // also refresh these so the preview updates immediately
+        await loadData(roomId.trim());
+        setRefreshKey((k) => k + 1);
+      }
+    } catch (e: any) {
+      setDraftActionMsg(`Reset failed: ${e?.message || String(e)}`);
+    } finally {
+      setDraftActionBusy(false);
+    }
+  }
+
+  const draftStatus = useMemo(() => {
+    if (!draftState) return "No draft_state row yet";
+    const live = draftState.is_paused ? "PAUSED" : "LIVE";
+    return `${live} • Round ${draftState.current_round}/${draftState.rounds_total} • Pick ${draftState.current_pick_in_round} • Coach ${draftState.current_coach_id}`;
+  }, [draftState]);
+
+  // =========================================================
   // ✅ Apply the room (only then do DB calls + DraftClient refresh)
+  // =========================================================
+
   function applyRoom(nextRoom?: string) {
     const next = (nextRoom ?? roomIdInput).trim();
     if (!next) return;
@@ -164,7 +347,7 @@ export default function AdminClient() {
     }
   }
 
-  // ✅ now ONLY runs when you "Load room" (or press Enter)
+  // ✅ runs when roomId changes
   useEffect(() => {
     loadData(roomId.trim());
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -467,9 +650,92 @@ export default function AdminClient() {
 
   const editorLocked = resetBusy || saveBusy;
 
+  const anyBusy = busy || saveBusy || resetBusy || draftActionBusy;
+
   return (
     <div style={{ padding: 16, maxWidth: 1200 }}>
       <h1 style={{ marginTop: 0 }}>Admin</h1>
+
+      {/* ✅ Draft Controls */}
+      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontWeight: 900, marginBottom: 4 }}>Draft Controls</div>
+            <div style={{ fontSize: 12, opacity: 0.8 }}>
+              Room: <strong>{roomId.trim() || "(blank)"}</strong> • Status: <strong>{draftStatus}</strong>
+            </div>
+
+            {draftState?.is_paused ? (
+              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
+                Reason: <strong>{pauseReasonLabel(draftState.pause_reason) ?? "Paused"}</strong>
+              </div>
+            ) : null}
+
+            {draftStateErr ? (
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, color: "#b91c1c" }}>
+                {draftStateErr}
+              </div>
+            ) : null}
+
+            {draftActionMsg ? <div style={{ marginTop: 8, fontWeight: 900 }}>{draftActionMsg}</div> : null}
+          </div>
+
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={startDraft}
+              disabled={draftActionBusy || !roomId.trim()}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #222",
+                background: "#111",
+                color: "#fff",
+                fontWeight: 900,
+                cursor: draftActionBusy ? "not-allowed" : "pointer",
+              }}
+              title="Create/initialize draft_state and start the draft"
+            >
+              {draftActionBusy ? "Working..." : "Start draft"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => pauseDraft(!(draftState?.is_paused ?? false))}
+              disabled={draftActionBusy || !roomId.trim()}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #222",
+                background: "#fff",
+                fontWeight: 900,
+                cursor: draftActionBusy ? "not-allowed" : "pointer",
+              }}
+              title="Pause or resume draft"
+            >
+              {draftState?.is_paused ? "Resume draft" : "Pause draft"}
+            </button>
+
+            <button
+              type="button"
+              onClick={resetDraft}
+              disabled={draftActionBusy || !roomId.trim()}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #b91c1c",
+                background: "#fff",
+                color: "#b91c1c",
+                fontWeight: 900,
+                cursor: draftActionBusy ? "not-allowed" : "pointer",
+              }}
+              title="Reset the draft (depends on your /api/admin/reset-draft implementation)"
+            >
+              Reset draft
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* Generator */}
       <div style={{ display: "grid", gap: 10, maxWidth: 760 }}>
@@ -598,10 +864,11 @@ export default function AdminClient() {
               <span style={{ fontSize: 12, opacity: 0.7 }}>(one-click “true reset”)</span>
             </label>
 
-            {changedCount > 0 ? (
+            {Object.keys(edits).length > 0 ? (
               <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
-                Pending: <strong>{changedCount}</strong> edited picks in UI • Save will write{" "}
-                <strong>{willWriteCount}</strong> picks for <strong>{block.label}</strong>
+                Pending: <strong>{Object.keys(edits).length}</strong> edited picks in UI • Save will write{" "}
+                <strong>{Object.keys(edits).length > 0 ? (block.to - block.from + 1) * nCoaches : 0}</strong>{" "}
+                picks for <strong>{block.label}</strong>
               </div>
             ) : null}
           </div>
@@ -643,23 +910,23 @@ export default function AdminClient() {
             <button
               type="button"
               onClick={saveManualEdits}
-              disabled={saveBusy || changedCount === 0 || resetBusy}
+              disabled={saveBusy || Object.keys(edits).length === 0 || resetBusy}
               style={{
                 padding: "10px 12px",
                 borderRadius: 10,
                 border: "1px solid #222",
-                background: saveBusy || changedCount === 0 || resetBusy ? "#aaa" : "#111",
+                background: saveBusy || Object.keys(edits).length === 0 || resetBusy ? "#aaa" : "#111",
                 color: "#fff",
                 fontWeight: 900,
-                cursor: saveBusy || changedCount === 0 || resetBusy ? "not-allowed" : "pointer",
+                cursor: saveBusy || Object.keys(edits).length === 0 || resetBusy ? "not-allowed" : "pointer",
               }}
               title="Save the entire block to draft_order (snake regen mode)"
             >
               {saveBusy
                 ? "Saving..."
-                : changedCount === 0
+                : Object.keys(edits).length === 0
                 ? `Save block (${block.label})`
-                : `Save block (${block.label}) • write ${willWriteCount}`}
+                : `Save block (${block.label}) • write ${(block.to - block.from + 1) * nCoaches}`}
             </button>
           </div>
         </div>
@@ -704,9 +971,7 @@ export default function AdminClient() {
                           {cell.round}
                         </td>
                         <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0" }}>{cell.pickInRound}</td>
-                        <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0" }}>
-                          #{cell.overallPick}
-                        </td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0" }}>#{cell.overallPick}</td>
                         <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0" }}>
                           <select
                             disabled={editorLocked}
@@ -760,6 +1025,7 @@ export default function AdminClient() {
       <div style={{ marginTop: 18 }}>
         <div style={{ fontWeight: 900, marginBottom: 8 }}>
           Live Draft Board Preview (room: <span style={{ fontFamily: "monospace" }}>{roomId.trim()}</span>)
+          {anyBusy ? <span style={{ marginLeft: 10, fontSize: 12, opacity: 0.7 }}>• updating…</span> : null}
         </div>
         <DraftClient key={`${roomId.trim()}-${refreshKey}`} />
       </div>
