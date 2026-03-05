@@ -703,7 +703,7 @@ export default function AdminClient() {
       <h1 style={{ marginTop: 0 }}>Admin</h1>
 
             {/* ✅ Admin Tools (Sim + Export) */}
-      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, marginBottom: 14 }}>
+      <div style={{ border: "2px solid #e5e7eb",, borderRadius: 12, padding: 12, marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
             <div style={{ fontWeight: 900, marginBottom: 4 }}>Admin Tools</div>
@@ -741,6 +741,8 @@ export default function AdminClient() {
                 borderRadius: 10,
                 border: "1px solid #222",
                 background: "#fff",
+                color: "#111",
+                border: "2px solid #111",
                 fontWeight: 900,
                 cursor: toolsBusy ? "not-allowed" : "pointer",
               }}
@@ -753,7 +755,7 @@ export default function AdminClient() {
       </div>
 
       {/* ✅ Draft Controls */}
-      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, marginBottom: 14 }}>
+      <div style={{ border: "2px solid #e5e7eb",, borderRadius: 12, padding: 12, marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
             <div style={{ fontWeight: 900, marginBottom: 4 }}>Draft Controls</div>
@@ -786,7 +788,9 @@ export default function AdminClient() {
                 borderRadius: 10,
                 border: "1px solid #222",
                 background: "#111",
-                color: "#fff",
+                background: "#fff",
+                color: "#111",
+                border: "2px solid #111",
                 fontWeight: 900,
                 cursor: draftActionBusy ? "not-allowed" : "pointer",
               }}
@@ -804,8 +808,10 @@ export default function AdminClient() {
                 borderRadius: 10,
                 border: "1px solid #222",
                 background: "#fff",
+                color: "#111",
+                border: "2px solid #111",
                 fontWeight: 900,
-                cursor: draftActionBusy ? "not-allowed" : "pointer",
+                cursor: toolsBusy ? "not-allowed" : "pointer",
               }}
               title="Pause or resume draft"
             >
@@ -933,7 +939,7 @@ export default function AdminClient() {
       </div>
 
       {/* Manual editor */}
-      <div style={{ marginTop: 18, border: "1px solid #ddd", borderRadius: 12, padding: 12 }}>
+      <div style={{ marginTop: 18, border: "2px solid #e5e7eb",, borderRadius: 12, padding: 12 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
             <h2 style={{ margin: 0 }}>Manual Order Editor</h2>
