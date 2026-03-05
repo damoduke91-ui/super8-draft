@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import DraftClient from "../draft/DraftClient";
 import { supabase } from "../lib/supabase";
@@ -37,6 +37,8 @@ const BLOCKS = [
   { label: "Rounds 31–40", from: 31, to: 40 },
   { label: "Rounds 41–46", from: 41, to: 46 },
 ] as const;
+
+const ROOM_DISPLAY_NAME = "Super8 Draft";
 
 function pauseReasonLabel(pause_reason: string | null) {
   if (!pause_reason) return null;
@@ -91,6 +93,9 @@ export default function AdminClient() {
 
   // ✅ pro toggle
   const [autoSaveAfterReset, setAutoSaveAfterReset] = useState(true);
+
+  // ✅ debug toggle (hides the noisy room-id stuff by default)
+  const [showDebug, setShowDebug] = useState(false);
 
   // force refresh of embedded DraftClient after save/generate/admin actions
   const [refreshKey, setRefreshKey] = useState(0);
@@ -212,7 +217,7 @@ export default function AdminClient() {
     if (!roomId.trim()) return setDraftActionMsg("Room id is required.");
 
     const ok = window.confirm(
-      `Start draft for room "${roomId.trim()}"?\n\nThis should create/initialize draft_state if needed and set draft LIVE.`
+      `Start draft for "${ROOM_DISPLAY_NAME}"?\n\nThis should create/initialize draft_state if needed and set draft LIVE.`
     );
     if (!ok) return;
 
@@ -239,7 +244,7 @@ export default function AdminClient() {
     if (!roomId.trim()) return setDraftActionMsg("Room id is required.");
 
     const ok = window.confirm(
-      nextPaused ? `Pause draft for room "${roomId.trim()}"?` : `Resume draft for room "${roomId.trim()}"?`
+      nextPaused ? `Pause draft for "${ROOM_DISPLAY_NAME}"?` : `Resume draft for "${ROOM_DISPLAY_NAME}"?`
     );
     if (!ok) return;
 
@@ -270,7 +275,7 @@ export default function AdminClient() {
     if (!roomId.trim()) return setDraftActionMsg("Room id is required.");
 
     const ok = window.confirm(
-      `RESET draft for room "${roomId.trim()}"?\n\nThis should reset draft_state + clear drafted players (depending on your RPC/route).\n\nThis cannot be undone.`
+      `RESET the draft for "${ROOM_DISPLAY_NAME}"?\n\nThis should reset draft_state + clear drafted players (depending on your RPC/route).\n\nThis cannot be undone.`
     );
     if (!ok) return;
 
@@ -685,14 +690,19 @@ export default function AdminClient() {
   const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || toolsBusy;
 
   return (
-    <Page title="Admin" subtitle="Manage draft controls, order, simulation and exports.">
+    <Page title="Admin" subtitle={`Manage draft controls and order for ${ROOM_DISPLAY_NAME}.`}>
       {/* ✅ Admin Tools */}
       <Card
         title="Admin Tools"
         right={
-          <SmallText>
-            Room: <strong>{roomId.trim() || "(blank)"}</strong>
-          </SmallText>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <SmallText>
+              Room: <strong>{ROOM_DISPLAY_NAME}</strong>
+            </SmallText>
+            <Button onClick={() => setShowDebug((v) => !v)} disabled={anyBusy}>
+              {showDebug ? "Hide debug" : "Show debug"}
+            </Button>
+          </div>
         }
       >
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -715,12 +725,45 @@ export default function AdminClient() {
         </div>
       </Card>
 
+      {/* ✅ Debug (hidden by default) */}
+      {showDebug ? (
+        <Card title="Debug">
+          <SmallText>
+            Real room id in use:{" "}
+            <span style={{ fontFamily: "monospace", fontWeight: 950 }}>{roomId.trim() || "(blank)"}</span>
+          </SmallText>
+
+          <div style={{ display: "grid", gap: 10, maxWidth: 760, marginTop: 10 }}>
+            <label>
+              <div style={{ fontWeight: 900, marginBottom: 6 }}>Room ID (advanced)</div>
+              <input
+                suppressHydrationWarning
+                value={roomIdInput}
+                onChange={(e) => setRoomIdInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") applyRoom();
+                }}
+                style={fieldBase}
+              />
+              <SmallText>Press Enter to load, or click the button below.</SmallText>
+            </label>
+
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <Button onClick={() => applyRoom()}>Load room</Button>
+              <SmallText>
+                This is mainly for troubleshooting or running multiple rooms.
+              </SmallText>
+            </div>
+          </div>
+        </Card>
+      ) : null}
+
       {/* ✅ Draft Controls */}
       <Card title="Draft Controls">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
             <SmallText>
-              Room: <strong>{roomId.trim() || "(blank)"}</strong> • Status: <strong>{draftStatus}</strong>
+              Room: <strong>{ROOM_DISPLAY_NAME}</strong> • Status: <strong>{draftStatus}</strong>
             </SmallText>
 
             {draftState?.is_paused ? (
@@ -757,36 +800,12 @@ export default function AdminClient() {
         </div>
       </Card>
 
-      {/* ✅ Snake generator (now readable + consistent buttons) */}
-      <Card title="Snake Generator" right={<SmallText>Active room: <strong>{roomId || "(none)"}</strong></SmallText>}>
+      {/* ✅ Snake generator */}
+      <Card title="Snake Generator" right={<SmallText>Room: <strong>{ROOM_DISPLAY_NAME}</strong></SmallText>}>
         <div style={{ display: "grid", gap: 10, maxWidth: 760 }}>
           <label>
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>Room ID</div>
-            <input
-              suppressHydrationWarning
-              value={roomIdInput}
-              onChange={(e) => setRoomIdInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") applyRoom();
-              }}
-              style={fieldBase}
-            />
-          </label>
-
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <Button onClick={() => applyRoom()}>Load room</Button>
-            <SmallText>
-              Tip: you can press <strong>Enter</strong> in the Room ID box.
-            </SmallText>
-          </div>
-
-          <label>
             <div style={{ fontWeight: 900, marginBottom: 6 }}>Block</div>
-            <select
-              value={blockIdx}
-              onChange={(e) => setBlockIdx(Number(e.target.value))}
-              style={fieldBase}
-            >
+            <select value={blockIdx} onChange={(e) => setBlockIdx(Number(e.target.value))} style={fieldBase}>
               {BLOCKS.map((b, i) => (
                 <option key={b.label} value={i}>
                   {b.label}
@@ -838,7 +857,7 @@ export default function AdminClient() {
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
             <SmallText>
-              Room: <strong>{roomId.trim() || "(blank)"}</strong> • Block: <strong>{block.label}</strong> • Coaches:{" "}
+              Room: <strong>{ROOM_DISPLAY_NAME}</strong> • Block: <strong>{block.label}</strong> • Coaches:{" "}
               <strong>{coachOptions.length}</strong> • Picks loaded: <strong>{draftOrder.length}</strong>
             </SmallText>
 
@@ -974,7 +993,7 @@ export default function AdminClient() {
         title="Live Draft Board Preview"
         right={
           <SmallText>
-            room: <span style={{ fontFamily: "monospace" }}>{roomId.trim()}</span>
+            room: <strong>{ROOM_DISPLAY_NAME}</strong>
             {anyBusy ? <span style={{ marginLeft: 8, opacity: 0.8 }}>• updating…</span> : null}
           </SmallText>
         }
