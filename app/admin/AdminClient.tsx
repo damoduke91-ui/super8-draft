@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import DraftClient from "../draft/DraftClient";
 import { supabase } from "../lib/supabase";
+import { Page, Card, Button, SmallText } from "../ui/ui";
 
 type DraftState = {
   room_id: string;
@@ -116,7 +117,7 @@ export default function AdminClient() {
     if (!roomId.trim()) return setToolsMsg("Room id is required.");
 
     const ok = window.confirm(
-      `Simulate a FULL draft for 2 coaches in room "${roomId.trim()}"?\n\nThis will make many picks and write them to draft_picks.\nMake sure the room has only 2 coaches (or is intended for 2-coach sim).`
+      `Simulate a FULL draft for 2 coaches in room "${roomId.trim()}"?\n\nThis will make many picks and write them to draft_picks.\nMake sure the room is intended for 2-coach sim.`
     );
     if (!ok) return;
 
@@ -375,9 +376,7 @@ export default function AdminClient() {
     }
 
     if (oRes.error) {
-      setLoadErr(
-        (prev) => (prev ? prev + "\n" : "") + `Draft order load error: ${oRes.error.message}`
-      );
+      setLoadErr((prev) => (prev ? prev + "\n" : "") + `Draft order load error: ${oRes.error.message}`);
       setDraftOrder([]);
     } else {
       setDraftOrder((oRes.data as DraftOrderRow[]) || []);
@@ -675,143 +674,79 @@ export default function AdminClient() {
   const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || toolsBusy;
 
   return (
-    <div style={{ padding: 16, maxWidth: 1200 }}>
-      <h1 style={{ marginTop: 0 }}>Admin</h1>
-
-      {/* ✅ Admin Tools (Sim + Export) */}
-      <div style={{ border: "2px solid #e5e7eb", borderRadius: 12, padding: 12, marginBottom: 14 }}>
+    <Page title="Admin" subtitle="Manage draft controls, order, simulation and exports.">
+      {/* ✅ Admin Tools (Card + Buttons) */}
+      <Card
+        title="Admin Tools"
+        right={
+          <SmallText>
+            Room: <strong>{roomId.trim() || "(blank)"}</strong>
+          </SmallText>
+        }
+      >
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
-            <div style={{ fontWeight: 900, marginBottom: 4 }}>Admin Tools</div>
-            <div style={{ fontSize: 12, opacity: 0.8 }}>
+            <SmallText>
               Simulate a 2-coach draft and export picks as CSV (from <code>draft_picks</code>).
-            </div>
-            {toolsMsg ? <div style={{ marginTop: 8, fontWeight: 900 }}>{toolsMsg}</div> : null}
+            </SmallText>
+            {toolsMsg ? <div style={{ marginTop: 10, fontWeight: 950 }}>{toolsMsg}</div> : null}
           </div>
 
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={simulate2CoachDraft}
-              disabled={toolsBusy || !roomId.trim()}
-              style={{
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "2px solid #111",
-                background: toolsBusy ? "#aaa" : "#111",
-                color: "#fff",
-                fontWeight: 900,
-                cursor: toolsBusy ? "not-allowed" : "pointer",
-              }}
-              title="Auto-pick a full draft for 2 coaches (writes to draft_picks)"
-            >
+            <Button variant="primary" onClick={simulate2CoachDraft} disabled={toolsBusy || !roomId.trim()}>
               {toolsBusy ? "Simulating..." : "Simulate 2-coach draft"}
-            </button>
+            </Button>
 
-            <button
-              type="button"
-              onClick={exportPicksCsv}
-              disabled={toolsBusy || !roomId.trim()}
-              style={{
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "2px solid #111",
-                background: "#fff",
-                color: "#111",
-                fontWeight: 900,
-                cursor: toolsBusy ? "not-allowed" : "pointer",
-              }}
-              title="Download picks as CSV"
-            >
+            <Button onClick={exportPicksCsv} disabled={toolsBusy || !roomId.trim()}>
               Export picks (CSV)
-            </button>
+            </Button>
           </div>
         </div>
-      </div>
+      </Card>
 
-      {/* ✅ Draft Controls */}
-      <div style={{ border: "2px solid #e5e7eb", borderRadius: 12, padding: 12, marginBottom: 14 }}>
+      {/* ✅ Draft Controls (Card + Buttons) */}
+      <Card title="Draft Controls">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
-            <div style={{ fontWeight: 900, marginBottom: 4 }}>Draft Controls</div>
-            <div style={{ fontSize: 12, opacity: 0.8 }}>
+            <SmallText>
               Room: <strong>{roomId.trim() || "(blank)"}</strong> • Status: <strong>{draftStatus}</strong>
-            </div>
+            </SmallText>
 
             {draftState?.is_paused ? (
-              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
+              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
                 Reason: <strong>{pauseReasonLabel(draftState.pause_reason) ?? "Paused"}</strong>
               </div>
             ) : null}
 
             {draftStateErr ? (
-              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, color: "#b91c1c" }}>
+              <div style={{ marginTop: 10, fontSize: 12, fontWeight: 950, color: "#b91c1c" }}>
                 {draftStateErr}
               </div>
             ) : null}
 
-            {draftActionMsg ? <div style={{ marginTop: 8, fontWeight: 900 }}>{draftActionMsg}</div> : null}
+            {draftActionMsg ? <div style={{ marginTop: 10, fontWeight: 950 }}>{draftActionMsg}</div> : null}
           </div>
 
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={startDraft}
-              disabled={draftActionBusy || !roomId.trim()}
-              style={{
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "2px solid #111",
-                background: "#111",
-                color: "#fff",
-                fontWeight: 900,
-                cursor: draftActionBusy ? "not-allowed" : "pointer",
-              }}
-              title="Create/initialize draft_state and start the draft"
-            >
+            <Button variant="primary" onClick={startDraft} disabled={draftActionBusy || !roomId.trim()}>
               {draftActionBusy ? "Working..." : "Start draft"}
-            </button>
+            </Button>
 
-            <button
-              type="button"
+            <Button
               onClick={() => pauseDraft(!(draftState?.is_paused ?? false))}
               disabled={draftActionBusy || !roomId.trim()}
-              style={{
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "2px solid #111",
-                background: "#fff",
-                color: "#111",
-                fontWeight: 900,
-                cursor: draftActionBusy ? "not-allowed" : "pointer",
-              }}
-              title="Pause or resume draft"
             >
               {draftState?.is_paused ? "Resume draft" : "Pause draft"}
-            </button>
+            </Button>
 
-            <button
-              type="button"
-              onClick={resetDraft}
-              disabled={draftActionBusy || !roomId.trim()}
-              style={{
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "2px solid #b91c1c",
-                background: "#fff",
-                color: "#b91c1c",
-                fontWeight: 900,
-                cursor: draftActionBusy ? "not-allowed" : "pointer",
-              }}
-              title="Reset the draft (depends on your /api/admin/reset-draft implementation)"
-            >
+            <Button variant="danger" onClick={resetDraft} disabled={draftActionBusy || !roomId.trim()}>
               Reset draft
-            </button>
+            </Button>
           </div>
         </div>
-      </div>
+      </Card>
 
-      {/* Generator */}
+      {/* Generator (unchanged) */}
       <div style={{ display: "grid", gap: 10, maxWidth: 760 }}>
         <label>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>Room ID</div>
@@ -908,7 +843,7 @@ export default function AdminClient() {
         {msg ? <div style={{ marginTop: 6, fontWeight: 800 }}>{msg}</div> : null}
       </div>
 
-      {/* Manual editor */}
+      {/* Manual editor + Preview (unchanged from your current file) */}
       <div style={{ marginTop: 18, border: "2px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
@@ -1091,7 +1026,6 @@ export default function AdminClient() {
         )}
       </div>
 
-      {/* Live board preview */}
       <div style={{ marginTop: 18 }}>
         <div style={{ fontWeight: 900, marginBottom: 8 }}>
           Live Draft Board Preview (room: <span style={{ fontFamily: "monospace" }}>{roomId.trim()}</span>)
@@ -1099,6 +1033,6 @@ export default function AdminClient() {
         </div>
         <DraftClient key={`${roomId.trim()}-${refreshKey}`} />
       </div>
-    </div>
+    </Page>
   );
 }
