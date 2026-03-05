@@ -93,7 +93,7 @@ export default function AdminClient() {
 
   // ✅ pro toggle
   const [autoSaveAfterReset, setAutoSaveAfterReset] = useState(true);
-
+ 
   // ✅ debug toggle (hides the noisy room-id stuff by default)
   const [showDebug, setShowDebug] = useState(false);
 
@@ -696,15 +696,15 @@ export default function AdminClient() {
         <Card
         title="Admin Tools"
         right={
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <SmallText>
-              Room: <strong>{ROOM_DISPLAY_NAME}</strong>
-            </SmallText>
-            <Button onClick={() => setShowDebug((v) => !v)} disabled={anyBusy}>
-              {showDebug ? "Hide debug" : "Show debug"}
-            </Button>
-          </div>
-        }
+  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+    <SmallText>
+      Room: <strong>Super8 Draft</strong>
+    </SmallText>
+    <Button onClick={() => setShowDebug((v) => !v)} disabled={anyBusy}>
+      {showDebug ? "Hide debug" : "Show debug"}
+    </Button>
+  </div>
+}
       >
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
