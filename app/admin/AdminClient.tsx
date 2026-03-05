@@ -691,41 +691,44 @@ export default function AdminClient() {
 
   return (
     <Page title="Super8 Draft — Admin" subtitle="Draft control centre">
-      {/* ✅ Admin Tools (Debug only) */}
-        {showDebug ? (
-        <Card
-        title="Admin Tools"
-        right={
-  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-    <SmallText>
-      Room: <strong>Super8 Draft</strong>
-    </SmallText>
-    <Button onClick={() => setShowDebug((v) => !v)} disabled={anyBusy}>
-      {showDebug ? "Hide debug" : "Show debug"}
-    </Button>
-  </div>
-}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-          <div>
-            <SmallText>
-              Simulate a 2-coach draft and export picks as CSV (from <code>draft_picks</code>).
-            </SmallText>
-            {toolsMsg ? <div style={{ marginTop: 10, fontWeight: 950 }}>{toolsMsg}</div> : null}
-          </div>
+      {/* ✅ Admin Tools (always visible) */}
+<Card
+  title="Admin Tools"
+  right={
+    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+      <SmallText>
+        Room: <strong>Super8 Draft</strong>
+      </SmallText>
 
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <Button variant="primary" onClick={simulate2CoachDraft} disabled={toolsBusy || !roomId.trim()}>
-              {toolsBusy ? "Simulating..." : "Simulate 2-coach draft"}
-            </Button>
+      <Button onClick={() => setShowDebug((v) => !v)} disabled={anyBusy}>
+        {showDebug ? "Hide debug" : "Show debug"}
+      </Button>
+    </div>
+  }
+>
+  {showDebug ? (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+      <div>
+        <SmallText>
+          Simulate a 2-coach draft and export picks as CSV (from <code>draft_picks</code>).
+        </SmallText>
+        {toolsMsg ? <div style={{ marginTop: 10, fontWeight: 950 }}>{toolsMsg}</div> : null}
+      </div>
 
-            <Button onClick={exportPicksCsv} disabled={toolsBusy || !roomId.trim()}>
-              Export picks (CSV)
-            </Button>
-          </div>
-        </div>
-      </Card>
-        ) : null}
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <Button variant="primary" onClick={simulate2CoachDraft} disabled={toolsBusy || !roomId.trim()}>
+          {toolsBusy ? "Simulating..." : "Simulate 2-coach draft"}
+        </Button>
+
+        <Button onClick={exportPicksCsv} disabled={toolsBusy || !roomId.trim()}>
+          Export picks (CSV)
+        </Button>
+      </div>
+    </div>
+  ) : (
+    <SmallText>Debug tools hidden. Click “Show debug” to reveal.</SmallText>
+  )}
+</Card>
 
       {/* ✅ Debug (hidden by default) */}
       {showDebug ? (
