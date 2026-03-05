@@ -112,6 +112,19 @@ export default function AdminClient() {
   const [toolsBusy, setToolsBusy] = useState(false);
   const [toolsMsg, setToolsMsg] = useState("");
 
+  // =========================================================
+  // ✅ Shared field styles (fix unreadable dark inputs)
+  // =========================================================
+  const fieldBase: React.CSSProperties = {
+    width: "100%",
+    padding: 10,
+    borderRadius: 10,
+    border: "1px solid #d1d5db",
+    background: "#fff",
+    color: "#111",
+    outline: "none",
+  };
+
   async function simulate2CoachDraft() {
     setToolsMsg("");
     if (!roomId.trim()) return setToolsMsg("Room id is required.");
@@ -226,9 +239,7 @@ export default function AdminClient() {
     if (!roomId.trim()) return setDraftActionMsg("Room id is required.");
 
     const ok = window.confirm(
-      nextPaused
-        ? `Pause draft for room "${roomId.trim()}"?`
-        : `Resume draft for room "${roomId.trim()}"?`
+      nextPaused ? `Pause draft for room "${roomId.trim()}"?` : `Resume draft for room "${roomId.trim()}"?`
     );
     if (!ok) return;
 
@@ -675,7 +686,7 @@ export default function AdminClient() {
 
   return (
     <Page title="Admin" subtitle="Manage draft controls, order, simulation and exports.">
-      {/* ✅ Admin Tools (Card + Buttons) */}
+      {/* ✅ Admin Tools */}
       <Card
         title="Admin Tools"
         right={
@@ -704,7 +715,7 @@ export default function AdminClient() {
         </div>
       </Card>
 
-      {/* ✅ Draft Controls (Card + Buttons) */}
+      {/* ✅ Draft Controls */}
       <Card title="Draft Controls">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
@@ -713,7 +724,7 @@ export default function AdminClient() {
             </SmallText>
 
             {draftState?.is_paused ? (
-              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
+              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.9 }}>
                 Reason: <strong>{pauseReasonLabel(draftState.pause_reason) ?? "Paused"}</strong>
               </div>
             ) : null}
@@ -746,219 +757,154 @@ export default function AdminClient() {
         </div>
       </Card>
 
-      {/* Generator (unchanged) */}
-      <div style={{ display: "grid", gap: 10, maxWidth: 760 }}>
-        <label>
-          <div style={{ fontWeight: 800, marginBottom: 6 }}>Room ID</div>
-          <input
-            suppressHydrationWarning
-            value={roomIdInput}
-            onChange={(e) => setRoomIdInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") applyRoom();
-            }}
-            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
-          />
-        </label>
+      {/* ✅ Snake generator (now readable + consistent buttons) */}
+      <Card title="Snake Generator" right={<SmallText>Active room: <strong>{roomId || "(none)"}</strong></SmallText>}>
+        <div style={{ display: "grid", gap: 10, maxWidth: 760 }}>
+          <label>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Room ID</div>
+            <input
+              suppressHydrationWarning
+              value={roomIdInput}
+              onChange={(e) => setRoomIdInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") applyRoom();
+              }}
+              style={fieldBase}
+            />
+          </label>
 
-        <button
-          type="button"
-          onClick={() => applyRoom()}
-          style={{
-            padding: "10px 12px",
-            borderRadius: 10,
-            border: "1px solid #222",
-            background: "#fff",
-            fontWeight: 900,
-            cursor: "pointer",
-            width: "fit-content",
-          }}
-        >
-          Load room
-        </button>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <Button onClick={() => applyRoom()}>Load room</Button>
+            <SmallText>
+              Tip: you can press <strong>Enter</strong> in the Room ID box.
+            </SmallText>
+          </div>
 
-        <div style={{ fontSize: 12, opacity: 0.75 }}>
-          Active room: <strong>{roomId || "(none)"}</strong>
+          <label>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Block</div>
+            <select
+              value={blockIdx}
+              onChange={(e) => setBlockIdx(Number(e.target.value))}
+              style={fieldBase}
+            >
+              {BLOCKS.map((b, i) => (
+                <option key={b.label} value={i}>
+                  {b.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Coach IDs (comma separated)</div>
+            <input
+              suppressHydrationWarning
+              value={coachIdsStr}
+              onChange={(e) => setCoachIdsStr(e.target.value)}
+              style={fieldBase}
+            />
+            <SmallText>
+              Parsed: <strong>[{coachIdsParsed.join(", ")}]</strong>
+            </SmallText>
+          </label>
+
+          <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <input type="checkbox" checked={shuffle} onChange={(e) => setShuffle(e.target.checked)} />
+            <span style={{ fontWeight: 900 }}>Shuffle coach order for this block</span>
+          </label>
+
+          <label>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Seed (optional, number)</div>
+            <input
+              suppressHydrationWarning
+              value={seed}
+              onChange={(e) => setSeed(e.target.value)}
+              placeholder="e.g. 0.42"
+              style={fieldBase}
+            />
+          </label>
+
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <Button variant="primary" onClick={generate} disabled={busy}>
+              {busy ? "Generating..." : "Generate snake for selected block"}
+            </Button>
+            {msg ? <div style={{ fontWeight: 900 }}>{msg}</div> : null}
+          </div>
         </div>
+      </Card>
 
-        <label>
-          <div style={{ fontWeight: 800, marginBottom: 6 }}>Block</div>
-          <select
-            value={blockIdx}
-            onChange={(e) => setBlockIdx(Number(e.target.value))}
-            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
-          >
-            {BLOCKS.map((b, i) => (
-              <option key={b.label} value={i}>
-                {b.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          <div style={{ fontWeight: 800, marginBottom: 6 }}>Coach IDs (comma separated)</div>
-          <input
-            suppressHydrationWarning
-            value={coachIdsStr}
-            onChange={(e) => setCoachIdsStr(e.target.value)}
-            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
-          />
-          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>Parsed: [{coachIdsParsed.join(", ")}]</div>
-        </label>
-
-        <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <input type="checkbox" checked={shuffle} onChange={(e) => setShuffle(e.target.checked)} />
-          <span style={{ fontWeight: 800 }}>Shuffle coach order for this block</span>
-        </label>
-
-        <label>
-          <div style={{ fontWeight: 800, marginBottom: 6 }}>Seed (optional, number)</div>
-          <input
-            suppressHydrationWarning
-            value={seed}
-            onChange={(e) => setSeed(e.target.value)}
-            placeholder="e.g. 0.42"
-            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
-          />
-        </label>
-
-        <button
-          type="button"
-          onClick={generate}
-          disabled={busy}
-          style={{
-            padding: "12px 14px",
-            borderRadius: 10,
-            border: "1px solid #222",
-            background: busy ? "#aaa" : "#111",
-            color: "#fff",
-            fontWeight: 900,
-            cursor: busy ? "not-allowed" : "pointer",
-          }}
-        >
-          {busy ? "Generating..." : "Generate snake for selected block"}
-        </button>
-
-        {msg ? <div style={{ marginTop: 6, fontWeight: 800 }}>{msg}</div> : null}
-      </div>
-
-      {/* Manual editor + Preview (unchanged from your current file) */}
-      <div style={{ marginTop: 18, border: "2px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
+      {/* Manual editor */}
+      <Card title="Manual Order Editor">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
-            <h2 style={{ margin: 0 }}>Manual Order Editor</h2>
-            <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
-              Room: <strong>{roomId.trim() || "(blank)"}</strong> • Block: <strong>{block.label}</strong>
-              {" • "}Coaches: <strong>{coachOptions.length}</strong>{" "}
-              {coachesSorted.length ? "(from coaches table)" : "(inferred from draft_order)"}
-              {" • "}Picks loaded: <strong>{draftOrder.length}</strong>
-            </div>
+            <SmallText>
+              Room: <strong>{roomId.trim() || "(blank)"}</strong> • Block: <strong>{block.label}</strong> • Coaches:{" "}
+              <strong>{coachOptions.length}</strong> • Picks loaded: <strong>{draftOrder.length}</strong>
+            </SmallText>
 
-            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
+            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.9 }}>
               Mode: <strong>Snake regen</strong> — edit one pick and the entire block updates (even rounds reverse).
             </div>
 
-            <label style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 8 }}>
+            <label style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10 }}>
               <input
                 type="checkbox"
                 checked={autoSaveAfterReset}
                 onChange={(e) => setAutoSaveAfterReset(e.target.checked)}
               />
-              <span style={{ fontWeight: 900 }}>Auto-save to DB after reset</span>
-              <span style={{ fontSize: 12, opacity: 0.7 }}>(one-click “true reset”)</span>
+              <span style={{ fontWeight: 950 }}>Auto-save to DB after reset</span>
+              <span style={{ fontSize: 12, opacity: 0.8 }}>(one-click “true reset”)</span>
             </label>
 
             {Object.keys(edits).length > 0 ? (
-              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
-                Pending: <strong>{Object.keys(edits).length}</strong> edited picks in UI • Save will write{" "}
-                <strong>{Object.keys(edits).length > 0 ? (block.to - block.from + 1) * nCoaches : 0}</strong> picks
-                for <strong>{block.label}</strong>
+              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.9 }}>
+                Pending: <strong>{Object.keys(edits).length}</strong> edited picks in UI
               </div>
             ) : null}
           </div>
 
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={() => loadData(roomId.trim())}
-              disabled={editorLocked}
-              style={{
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "1px solid #222",
-                background: editorLocked ? "#eee" : "#fff",
-                fontWeight: 900,
-                cursor: editorLocked ? "not-allowed" : "pointer",
-              }}
-            >
+            <Button onClick={() => loadData(roomId.trim())} disabled={editorLocked}>
               Refresh
-            </button>
+            </Button>
 
-            <button
-              type="button"
-              onClick={resetBlockToGenerated}
-              disabled={resetBusy || saveBusy || busy || !nCoaches}
-              style={{
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "1px solid #222",
-                background: resetBusy ? "#ddd" : "#fff",
-                fontWeight: 900,
-                cursor: resetBusy ? "not-allowed" : "pointer",
-              }}
-              title="Reset the editor back to the last saved/generated order for this block"
-            >
+            <Button onClick={resetBlockToGenerated} disabled={resetBusy || saveBusy || busy || !nCoaches}>
               {resetBusy ? `Resetting ${block.label}...` : `Reset block (${block.label})`}
-            </button>
+            </Button>
 
-            <button
-              type="button"
+            <Button
+              variant="primary"
               onClick={saveManualEdits}
               disabled={saveBusy || Object.keys(edits).length === 0 || resetBusy}
-              style={{
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "1px solid #222",
-                background: saveBusy || Object.keys(edits).length === 0 || resetBusy ? "#aaa" : "#111",
-                color: "#fff",
-                fontWeight: 900,
-                cursor: saveBusy || Object.keys(edits).length === 0 || resetBusy ? "not-allowed" : "pointer",
-              }}
-              title="Save the entire block to draft_order (snake regen mode)"
             >
-              {saveBusy
-                ? "Saving..."
-                : Object.keys(edits).length === 0
-                ? `Save block (${block.label})`
-                : `Save block (${block.label}) • write ${(block.to - block.from + 1) * nCoaches}`}
-            </button>
+              {saveBusy ? "Saving..." : `Save block (${block.label})`}
+            </Button>
           </div>
         </div>
 
         {loadErr ? (
-          <pre style={{ marginTop: 10, padding: 10, background: "#fff5f5", border: "1px solid #f2c2c2" }}>
+          <pre style={{ marginTop: 12, padding: 12, background: "#fff5f5", border: "1px solid #f2c2c2" }}>
             {loadErr}
           </pre>
         ) : null}
 
-        {saveMsg ? <div style={{ marginTop: 10, fontWeight: 900 }}>{saveMsg}</div> : null}
+        {saveMsg ? <div style={{ marginTop: 12, fontWeight: 950 }}>{saveMsg}</div> : null}
 
         {!coachOptions.length ? (
-          <div style={{ marginTop: 12, opacity: 0.85 }}>
+          <div style={{ marginTop: 12, opacity: 0.9 }}>
             No coach columns available yet. Add coaches for this room or generate at least one draft_order pick.
           </div>
         ) : !blockGrid ? (
-          <div style={{ marginTop: 12, opacity: 0.85 }}>Loading…</div>
+          <div style={{ marginTop: 12, opacity: 0.9 }}>Loading…</div>
         ) : (
           <div style={{ marginTop: 12, overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Round</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Pick</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Overall</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Coach</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Round</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Pick</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Overall</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Coach</th>
                 </tr>
               </thead>
               <tbody>
@@ -972,26 +918,24 @@ export default function AdminClient() {
 
                     return (
                       <tr key={cell.overallPick} style={{ opacity: editorLocked ? 0.95 : 1 }}>
-                        <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0", fontWeight: 900 }}>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6", fontWeight: 950 }}>
                           {cell.round}
                         </td>
-                        <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0" }}>{cell.pickInRound}</td>
-                        <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0" }}>#{cell.overallPick}</td>
-                        <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0" }}>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{cell.pickInRound}</td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>#{cell.overallPick}</td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>
                           <select
                             disabled={editorLocked}
                             value={cell.coachId ?? ""}
                             onChange={(e) => setCell(cell.overallPick, Number(e.target.value))}
                             style={{
-                              width: "100%",
+                              ...fieldBase,
                               padding: 8,
-                              borderRadius: 8,
-                              border: edited ? "2px solid #111" : "1px solid #ccc",
-                              background: editorLocked ? "#f3f3f3" : edited ? "#fff6d6" : "#fff",
-                              color: editorLocked ? "#777" : "#000",
-                              fontWeight: 800,
+                              borderRadius: 10,
+                              border: edited ? "2px solid #111" : "1px solid #d1d5db",
+                              background: editorLocked ? "#f3f4f6" : edited ? "#fff6d6" : "#fff",
+                              fontWeight: 900,
                               cursor: editorLocked ? "not-allowed" : "pointer",
-                              opacity: editorLocked ? 0.85 : 1,
                             }}
                           >
                             <option value="" disabled>
@@ -1004,11 +948,11 @@ export default function AdminClient() {
                             ))}
                           </select>
 
-                          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                          <SmallText>
                             Current: <strong>{currentName}</strong>
                             {edited ? " • edited" : ""}
                             {editorLocked ? " • locked" : ""}
-                          </div>
+                          </SmallText>
                         </td>
                       </tr>
                     );
@@ -1017,22 +961,26 @@ export default function AdminClient() {
               </tbody>
             </table>
 
-            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
+            <SmallText>
               Tip: change any pick and the whole block is recalculated as a snake. Then hit <strong>Save block</strong>{" "}
-              to write it to <code>draft_order</code>. Use <strong>Reset block</strong> to revert your unsaved edits
-              (and auto-save if enabled).
-            </div>
+              to write it to <code>draft_order</code>. Use <strong>Reset block</strong> to revert unsaved edits.
+            </SmallText>
           </div>
         )}
-      </div>
+      </Card>
 
-      <div style={{ marginTop: 18 }}>
-        <div style={{ fontWeight: 900, marginBottom: 8 }}>
-          Live Draft Board Preview (room: <span style={{ fontFamily: "monospace" }}>{roomId.trim()}</span>)
-          {anyBusy ? <span style={{ marginLeft: 10, fontSize: 12, opacity: 0.7 }}>• updating…</span> : null}
-        </div>
+      {/* Live board preview */}
+      <Card
+        title="Live Draft Board Preview"
+        right={
+          <SmallText>
+            room: <span style={{ fontFamily: "monospace" }}>{roomId.trim()}</span>
+            {anyBusy ? <span style={{ marginLeft: 8, opacity: 0.8 }}>• updating…</span> : null}
+          </SmallText>
+        }
+      >
         <DraftClient key={`${roomId.trim()}-${refreshKey}`} />
-      </div>
+      </Card>
     </Page>
   );
 }
