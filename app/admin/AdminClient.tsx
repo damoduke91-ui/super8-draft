@@ -93,8 +93,8 @@ export default function AdminClient() {
 
   // ✅ pro toggle
   const [autoSaveAfterReset, setAutoSaveAfterReset] = useState(true);
- 
-  // ✅ debug toggle (hides the noisy room-id stuff by default)
+
+  // ✅ debug toggle
   const [showDebug, setShowDebug] = useState(false);
 
   // force refresh of embedded DraftClient after save/generate/admin actions
@@ -116,6 +116,12 @@ export default function AdminClient() {
   // =========================================================
   const [toolsBusy, setToolsBusy] = useState(false);
   const [toolsMsg, setToolsMsg] = useState("");
+
+  // =========================================================
+  // ✅ Absent coach proxy pick (UI only for now)
+  // =========================================================
+  const [proxyCoachId, setProxyCoachId] = useState<number>(1);
+  const [proxyMsg, setProxyMsg] = useState<string>("");
 
   // =========================================================
   // ✅ Shared field styles (fix unreadable dark inputs)
@@ -686,83 +692,19 @@ export default function AdminClient() {
     }
   }
 
+  // =========================================================
+  // ✅ Proxy pick (absent coach) - not wired yet
+  // =========================================================
+  async function proxyPickPlaceholder() {
+    // This will be wired to the same "make pick" flow as DraftClient once we paste DraftClient.tsx
+    setProxyMsg("Not wired yet — paste app/draft/DraftClient.tsx next and I will hook this into the real pick endpoint.");
+  }
+
   const editorLocked = resetBusy || saveBusy;
   const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || toolsBusy;
 
   return (
     <Page title="Super8 Draft — Admin" subtitle="Draft control centre">
-      {/* ✅ Admin Tools (always visible) */}
-<Card
-  title="Admin Tools"
-  right={
-    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-      <SmallText>
-        Room: <strong>Super8 Draft</strong>
-      </SmallText>
-
-      <Button onClick={() => setShowDebug((v) => !v)} disabled={anyBusy}>
-        {showDebug ? "Hide debug" : "Show debug"}
-      </Button>
-    </div>
-  }
->
-  {showDebug ? (
-    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-      <div>
-        <SmallText>
-          Simulate a 2-coach draft and export picks as CSV (from <code>draft_picks</code>).
-        </SmallText>
-        {toolsMsg ? <div style={{ marginTop: 10, fontWeight: 950 }}>{toolsMsg}</div> : null}
-      </div>
-
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <Button variant="primary" onClick={simulate2CoachDraft} disabled={toolsBusy || !roomId.trim()}>
-          {toolsBusy ? "Simulating..." : "Simulate 2-coach draft"}
-        </Button>
-
-        <Button onClick={exportPicksCsv} disabled={toolsBusy || !roomId.trim()}>
-          Export picks (CSV)
-        </Button>
-      </div>
-    </div>
-  ) : (
-    <SmallText>Debug tools hidden. Click “Show debug” to reveal.</SmallText>
-  )}
-</Card>
-
-      {/* ✅ Debug (hidden by default) */}
-      {showDebug ? (
-        <Card title="Debug">
-          <SmallText>
-            Real room id in use:{" "}
-            <span style={{ fontFamily: "monospace", fontWeight: 950 }}>{roomId.trim() || "(blank)"}</span>
-          </SmallText>
-
-          <div style={{ display: "grid", gap: 10, maxWidth: 760, marginTop: 10 }}>
-            <label>
-              <div style={{ fontWeight: 900, marginBottom: 6 }}>Room ID (advanced)</div>
-              <input
-                suppressHydrationWarning
-                value={roomIdInput}
-                onChange={(e) => setRoomIdInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") applyRoom();
-                }}
-                style={fieldBase}
-              />
-              <SmallText>Press Enter to load, or click the button below.</SmallText>
-            </label>
-
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <Button onClick={() => applyRoom()}>Load room</Button>
-              <SmallText>
-                This is mainly for troubleshooting or running multiple rooms.
-              </SmallText>
-            </div>
-          </div>
-        </Card>
-      ) : null}
-
       {/* ✅ Draft Controls */}
       <Card title="Draft Controls">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -857,6 +799,47 @@ export default function AdminClient() {
         </div>
       </Card>
 
+      {/* ✅ Admin proxy pick (absent coach) */}
+      <Card title="Admin Proxy Pick (Absent Coach)">
+        <SmallText>
+          Use this only if a coach is absent. This will draft on their behalf (once wired to the real pick endpoint).
+        </SmallText>
+
+        <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ minWidth: 240 }}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Coach</div>
+            <select
+              value={proxyCoachId}
+              onChange={(e) => setProxyCoachId(Number(e.target.value))}
+              style={fieldBase}
+            >
+              {coachOptions.length
+                ? coachOptions.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))
+                : [1, 2, 3, 4, 5, 6, 7, 8].map((id) => (
+                    <option key={id} value={id}>
+                      Coach {id}
+                    </option>
+                  ))}
+            </select>
+          </div>
+
+          <Button variant="primary" onClick={proxyPickPlaceholder} disabled={anyBusy || !roomId.trim()}>
+            Draft for Coach {proxyCoachId}
+          </Button>
+
+          {proxyMsg ? <div style={{ fontWeight: 950 }}>{proxyMsg}</div> : null}
+        </div>
+
+        <SmallText>
+          Next step: paste <code>app/draft/DraftClient.tsx</code> so I can wire this into the exact same pick logic your
+          coaches use (no duplicate systems).
+        </SmallText>
+      </Card>
+
       {/* Manual editor */}
       <Card title="Manual Order Editor">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -921,81 +904,153 @@ export default function AdminClient() {
         ) : !blockGrid ? (
           <div style={{ marginTop: 12, opacity: 0.9 }}>Loading…</div>
         ) : (
-          <div style={{ marginTop: 12, overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Round</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Pick</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Overall</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Coach</th>
-                </tr>
-              </thead>
-              <tbody>
-                {blockGrid.flatMap((r) =>
-                  r.cells.map((cell) => {
-                    const currentName =
-                      cell.coachId != null
-                        ? coachNameById.get(cell.coachId) ?? `Coach ${cell.coachId}`
-                        : "—";
-                    const edited = Object.prototype.hasOwnProperty.call(edits, cell.overallPick);
+          <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+            {(() => {
+              const pairs: Array<[number, number | null]> = [];
+              for (let r = block.from; r <= block.to; r += 2) {
+                pairs.push([r, r + 1 <= block.to ? r + 1 : null]);
+              }
 
-                    return (
-                      <tr key={cell.overallPick} style={{ opacity: editorLocked ? 0.95 : 1 }}>
-                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6", fontWeight: 950 }}>
-                          {cell.round}
-                        </td>
-                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{cell.pickInRound}</td>
-                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>#{cell.overallPick}</td>
-                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>
-                          <select
-                            disabled={editorLocked}
-                            value={cell.coachId ?? ""}
-                            onChange={(e) => setCell(cell.overallPick, Number(e.target.value))}
-                            style={{
-                              ...fieldBase,
-                              padding: 8,
-                              borderRadius: 10,
-                              border: edited ? "2px solid #111" : "1px solid #d1d5db",
-                              background: editorLocked ? "#f3f4f6" : edited ? "#fff6d6" : "#fff",
-                              fontWeight: 900,
-                              cursor: editorLocked ? "not-allowed" : "pointer",
-                            }}
-                          >
-                            <option value="" disabled>
-                              Select coach…
-                            </option>
-                            {coachOptions.map((c) => (
-                              <option key={c.id} value={c.id}>
-                                {c.name}
-                              </option>
-                            ))}
-                          </select>
+              const cellsByRound = new Map<number, any[]>();
+              for (const rr of blockGrid) cellsByRound.set(rr.round, rr.cells);
 
-                          <SmallText>
-                            Current: <strong>{currentName}</strong>
-                            {edited ? " • edited" : ""}
-                            {editorLocked ? " • locked" : ""}
-                          </SmallText>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+              const compactSelect: React.CSSProperties = {
+                ...fieldBase,
+                padding: "6px 8px",
+                borderRadius: 10,
+                width: 220,
+                maxWidth: "100%",
+                fontWeight: 900,
+                height: 34,
+              };
 
-            <SmallText>
-              Tip: change any pick and the whole block is recalculated as a snake. Then hit <strong>Save block</strong>{" "}
-              to write it to <code>draft_order</code>. Use <strong>Reset block</strong> to revert unsaved edits.
-            </SmallText>
+              const rowStyle: React.CSSProperties = {
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                padding: "6px 0",
+                borderBottom: "1px solid #f3f4f6",
+              };
+
+              const leftMeta: React.CSSProperties = {
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                minWidth: 160,
+                flexWrap: "wrap",
+              };
+
+              const pill: React.CSSProperties = {
+                fontSize: 12,
+                fontWeight: 950,
+                padding: "2px 8px",
+                borderRadius: 999,
+                border: "1px solid #e5e7eb",
+                background: "#fff",
+                color: "#111",
+              };
+
+              function RoundColumn({ round }: { round: number }) {
+                const cells = cellsByRound.get(round) || [];
+
+                return (
+                  <div
+                    style={{
+                      background: "#fff",
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 14,
+                      padding: 12,
+                      minWidth: 320,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                      <div style={{ fontWeight: 950, fontSize: 14 }}>Round {round}</div>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>{cells.length} picks</div>
+                    </div>
+
+                    <div style={{ marginTop: 10 }}>
+                      {cells.map((cell) => {
+                        const currentName =
+                          cell.coachId != null
+                            ? coachNameById.get(cell.coachId) ?? `Coach ${cell.coachId}`
+                            : "—";
+                        const edited = Object.prototype.hasOwnProperty.call(edits, cell.overallPick);
+
+                        return (
+                          <div key={cell.overallPick} style={{ ...rowStyle, opacity: editorLocked ? 0.95 : 1 }}>
+                            <div style={leftMeta}>
+                              <span style={pill}>P{cell.pickInRound}</span>
+                              <span style={{ fontSize: 12, opacity: 0.8 }}>#{cell.overallPick}</span>
+                              {edited ? <span style={{ ...pill, borderColor: "#111" }}>edited</span> : null}
+                            </div>
+
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                              <select
+                                disabled={editorLocked}
+                                value={cell.coachId ?? ""}
+                                onChange={(e) => setCell(cell.overallPick, Number(e.target.value))}
+                                style={{
+                                  ...compactSelect,
+                                  border: edited ? "2px solid #111" : (compactSelect.border as any),
+                                  background: editorLocked ? "#f3f4f6" : edited ? "#fff6d6" : "#fff",
+                                  cursor: editorLocked ? "not-allowed" : "pointer",
+                                }}
+                              >
+                                <option value="" disabled>
+                                  Select coach…
+                                </option>
+                                {coachOptions.map((c) => (
+                                  <option key={c.id} value={c.id}>
+                                    {c.name}
+                                  </option>
+                                ))}
+                              </select>
+
+                              <div style={{ fontSize: 12, opacity: 0.8 }}>
+                                Current: <strong>{currentName}</strong>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div style={{ display: "grid", gap: 12 }}>
+                  {pairs.map(([a, b]) => (
+                    <div
+                      key={`${a}-${b ?? "x"}`}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                        gap: 12,
+                        alignItems: "start",
+                      }}
+                    >
+                      <RoundColumn round={a} />
+                      {b ? <RoundColumn round={b} /> : <div />}
+                    </div>
+                  ))}
+
+                  <SmallText>
+                    Tip: change any pick and the whole block is recalculated as a snake. Then hit{" "}
+                    <strong>Save block</strong> to write it to <code>draft_order</code>. Use{" "}
+                    <strong>Reset block</strong> to revert unsaved edits.
+                  </SmallText>
+                </div>
+              );
+            })()}
           </div>
         )}
       </Card>
 
-      {/* Live board preview */}
+      {/* Live board */}
       <Card
-        title="Live Draft Board Preview"
+        title="Live Draft Board"
         right={
           <SmallText>
             room: <strong>{ROOM_DISPLAY_NAME}</strong>
@@ -1003,7 +1058,78 @@ export default function AdminClient() {
           </SmallText>
         }
       >
-        <DraftClient key={`${roomId.trim()}-${refreshKey}`} />
+        {/* Step 4: pass admin mode so we can hide Analytics/My Draft Sheet/selection tools in DraftClient */}
+        <DraftClient key={`${roomId.trim()}-${refreshKey}`} mode="admin" />
+      </Card>
+
+      {/* ✅ Admin Tools moved to bottom */}
+      <Card
+        title="Admin Tools"
+        right={
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <SmallText>
+              Room: <strong>{ROOM_DISPLAY_NAME}</strong>
+            </SmallText>
+
+            <Button onClick={() => setShowDebug((v) => !v)} disabled={anyBusy}>
+              {showDebug ? "Hide debug" : "Show debug"}
+            </Button>
+          </div>
+        }
+      >
+        {showDebug ? (
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <SmallText>
+                  Simulate a 2-coach draft and export picks as CSV (from <code>draft_picks</code>).
+                </SmallText>
+                {toolsMsg ? <div style={{ marginTop: 10, fontWeight: 950 }}>{toolsMsg}</div> : null}
+              </div>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <Button variant="primary" onClick={simulate2CoachDraft} disabled={toolsBusy || !roomId.trim()}>
+                  {toolsBusy ? "Simulating..." : "Simulate 2-coach draft"}
+                </Button>
+
+                <Button onClick={exportPicksCsv} disabled={toolsBusy || !roomId.trim()}>
+                  Export picks (CSV)
+                </Button>
+              </div>
+            </div>
+
+            {/* Debug section */}
+            <div style={{ paddingTop: 4 }}>
+              <SmallText>
+                Real room id in use:{" "}
+                <span style={{ fontFamily: "monospace", fontWeight: 950 }}>{roomId.trim() || "(blank)"}</span>
+              </SmallText>
+
+              <div style={{ display: "grid", gap: 10, maxWidth: 760, marginTop: 10 }}>
+                <label>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Room ID (advanced)</div>
+                  <input
+                    suppressHydrationWarning
+                    value={roomIdInput}
+                    onChange={(e) => setRoomIdInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") applyRoom();
+                    }}
+                    style={fieldBase}
+                  />
+                  <SmallText>Press Enter to load, or click the button below.</SmallText>
+                </label>
+
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <Button onClick={() => applyRoom()}>Load room</Button>
+                  <SmallText>This is mainly for troubleshooting or running multiple rooms.</SmallText>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <SmallText>Debug tools hidden. Click “Show debug” to reveal.</SmallText>
+        )}
       </Card>
     </Page>
   );
