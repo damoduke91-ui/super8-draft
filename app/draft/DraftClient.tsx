@@ -137,7 +137,11 @@ type ConfirmState = {
   player: Player | null;
 };
 
-export default function DraftClient({ mode = "coach" }: { mode?: "admin" | "coach" }) {
+type DraftClientProps = {
+  mode?: "admin" | "coach";
+};
+
+export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const isAdmin = mode === "admin";
 
   const sp = useSearchParams();
@@ -182,8 +186,6 @@ export default function DraftClient({ mode = "coach" }: { mode?: "admin" | "coac
 
   // ---------------------------------------------------------
   // ✅ PERFORMANCE FIXES
-  // - Use ONE realtime channel with multiple handlers
-  // - Debounce reloads so bursts of events don’t spam Supabase
   // ---------------------------------------------------------
   const timersRef = useRef<Record<string, any>>({});
 
@@ -265,6 +267,11 @@ export default function DraftClient({ mode = "coach" }: { mode?: "admin" | "coac
   }
 
   async function initialLoad() {
+    // Admin view does not need the players list (huge), so skip it to keep Admin fast
+    if (isAdmin) {
+      await Promise.all([loadState(), loadCoaches(), loadDraftOrder()]);
+      return;
+    }
     await Promise.all([loadState(), loadPlayers(), loadCoaches(), loadDraftOrder()]);
   }
 
@@ -272,7 +279,7 @@ export default function DraftClient({ mode = "coach" }: { mode?: "admin" | "coac
     for (const k of Object.keys(timersRef.current)) clearTimeout(timersRef.current[k]);
     timersRef.current = {};
 
-    initialLoad();
+    void initialLoad();
 
     const ch = supabase.channel(`draft_room_${room}`);
 
@@ -282,11 +289,13 @@ export default function DraftClient({ mode = "coach" }: { mode?: "admin" | "coac
       () => schedule("state", loadState, 120)
     );
 
-    ch.on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "players", filter: `room_id=eq.${room}` },
-      () => schedule("players", loadPlayers, 250)
-    );
+    if (!isAdmin) {
+      ch.on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "players", filter: `room_id=eq.${room}` },
+        () => schedule("players", loadPlayers, 250)
+      );
+    }
 
     ch.on(
       "postgres_changes",
@@ -308,7 +317,7 @@ export default function DraftClient({ mode = "coach" }: { mode?: "admin" | "coac
       timersRef.current = {};
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room]);
+  }, [room, isAdmin]);
 
   // ---------- Helpers derived from data ----------
   const inferredCoachIds = useMemo(() => {
@@ -319,11 +328,15 @@ export default function DraftClient({ mode = "coach" }: { mode?: "admin" | "coac
 
   const coachColumns = useMemo(() => {
     if (coaches.length > 0) {
-      return [...coaches]
-        .sort((a, b) => a.coach_id - b.coach_id)
-        .map((c) => ({ coach_id: c.coach_id, coach_name: c.coach_name }));
+      return [...coaches].sort((a, b) => a.coach_id - b.coach_id).map((c) => ({
+        coach_id: c.coach_id,
+        coach_name: c.coach_name,
+      }));
     }
-    return inferredCoachIds.map((id) => ({ coach_id: id, coach_name: `Coach ${id}` }));
+    return inferredCoachIds.map((id) => ({
+      coach_id: id,
+      coach_name: `Coach ${id}`,
+    }));
   }, [coaches, inferredCoachIds]);
 
   const coachNameById = useMemo(() => {
@@ -759,7 +772,9 @@ export default function DraftClient({ mode = "coach" }: { mode?: "admin" | "coac
                         >
                           <div style={{ fontWeight: 1000 }}>{c.coach_name}</div>
                           <div style={{ fontSize: 12, opacity: 0.8 }}>Overall #{c.overall}</div>
-                          {c.drafted ? (
+
+                          {/* In Admin mode we do not even load players, so drafted names won’t display (keeps Admin fast) */}
+                          {!isAdmin && c.drafted ? (
                             <div style={{ marginTop: 4, fontSize: 12 }}>
                               <strong>{c.drafted.player_name}</strong>
                               <div style={{ opacity: 0.8 }}>
@@ -780,7 +795,7 @@ export default function DraftClient({ mode = "coach" }: { mode?: "admin" | "coac
         </div>
       </div>
 
-      {/* Players / Analytics / Draft Sheet (hidden in Admin mode) */}
+      {/* Everything below hidden for Admin */}
       {!isAdmin && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           {/* Players */}
@@ -927,7 +942,7 @@ export default function DraftClient({ mode = "coach" }: { mode?: "admin" | "coac
               </span>
             </div>
 
-            {/* Player list (clickable rows) */}
+            {/* Player list */}
             <div style={{ maxHeight: 520, overflowY: "auto", borderTop: "1px solid rgba(255,255,255,0.12)" }}>
               {filtered.map((p) => {
                 const disabled = !isMyTurn || busy || p.drafted_by_coach_id != null || !!state?.is_paused;
@@ -1001,29 +1016,17 @@ export default function DraftClient({ mode = "coach" }: { mode?: "admin" | "coac
             </div>
           </div>
 
-          {/* Right side: analytics + my sheet */}
+          {/* Right side */}
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {/* Analytics */}
             <div style={{ border: "1px solid #ddd", padding: 12, borderRadius: 10, background: "#fff" }}>
               <h2 style={{ marginTop: 0 }}>Analytics</h2>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <div style={chipStyle}>
-                  <span>Total</span>
-                  <span>{analytics.total}</span>
-                </div>
-                <div style={chipStyle}>
-                  <span>Available</span>
-                  <span>{analytics.available}</span>
-                </div>
-                <div style={chipStyle}>
-                  <span>Drafted</span>
-                  <span>{analytics.drafted}</span>
-                </div>
-                <div style={chipStyle}>
-                  <span>My Picks</span>
-                  <span>{analytics.myPicks}</span>
-                </div>
+                <div style={chipStyle}><span>Total</span><span>{analytics.total}</span></div>
+                <div style={chipStyle}><span>Available</span><span>{analytics.available}</span></div>
+                <div style={chipStyle}><span>Drafted</span><span>{analytics.drafted}</span></div>
+                <div style={chipStyle}><span>My Picks</span><span>{analytics.myPicks}</span></div>
               </div>
 
               <div style={{ marginTop: 12, fontWeight: 1000, fontSize: 13, opacity: 0.8 }}>
@@ -1096,7 +1099,7 @@ export default function DraftClient({ mode = "coach" }: { mode?: "admin" | "coac
         </div>
       )}
 
-      {/* Confirm modal (hidden in Admin mode) */}
+      {/* Confirm modal */}
       {!isAdmin && confirm.open && confirm.player ? (
         <div
           role="dialog"
