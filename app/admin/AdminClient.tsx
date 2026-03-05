@@ -105,7 +105,7 @@ export default function AdminClient() {
   const [draftActionBusy, setDraftActionBusy] = useState(false);
   const [draftActionMsg, setDraftActionMsg] = useState<string>("");
 
-    // =========================================================
+  // =========================================================
   // ✅ Simulator + Export tools
   // =========================================================
   const [toolsBusy, setToolsBusy] = useState(false);
@@ -147,7 +147,6 @@ export default function AdminClient() {
   function exportPicksCsv() {
     setToolsMsg("");
     if (!roomId.trim()) return setToolsMsg("Room id is required.");
-    // Opens CSV download in a new tab
     window.open(`/api/admin/export-picks?room=${encodeURIComponent(roomId.trim())}`, "_blank");
   }
 
@@ -176,7 +175,6 @@ export default function AdminClient() {
   }
 
   useEffect(() => {
-    // live subscribe for the current room
     if (!roomId.trim()) return;
 
     loadDraftState(roomId.trim());
@@ -206,7 +204,6 @@ export default function AdminClient() {
 
     setDraftActionBusy(true);
     try {
-      // ✅ FIX: API expects roomId (not room_id)
       const { res, json } = await postJson("/api/admin/start-draft", { roomId: roomId.trim() });
 
       if (!res.ok || !json?.ok) {
@@ -236,7 +233,6 @@ export default function AdminClient() {
 
     setDraftActionBusy(true);
     try {
-      // ✅ FIX: send roomId and pause/resume fields expected by the route replacement below
       const { res, json } = await postJson("/api/admin/pause-draft", {
         roomId: roomId.trim(),
         is_paused: nextPaused,
@@ -268,7 +264,6 @@ export default function AdminClient() {
 
     setDraftActionBusy(true);
     try {
-      // ✅ FIX: API expects roomId (not room_id)
       const { res, json } = await postJson("/api/admin/reset-draft", { roomId: roomId.trim() });
 
       if (!res.ok || !json?.ok) {
@@ -276,7 +271,6 @@ export default function AdminClient() {
       } else {
         setDraftActionMsg("♻️ Draft reset");
         await loadDraftState(roomId.trim());
-        // also refresh these so the preview updates immediately
         await loadData(roomId.trim());
         setRefreshKey((k) => k + 1);
       }
@@ -303,7 +297,6 @@ export default function AdminClient() {
 
     setRoomId(next);
 
-    // preserve existing `coach` query param if present
     const coach = sp.get("coach");
     const qs = new URLSearchParams();
     qs.set("room", next);
@@ -329,7 +322,6 @@ export default function AdminClient() {
     return m;
   }, [coachesSorted]);
 
-  // If coaches table empty, infer coach IDs from current draft_order
   const inferredCoachIds = useMemo(() => {
     const s = new Set<number>();
     for (const r of draftOrder) s.add(r.coach_id);
@@ -355,7 +347,6 @@ export default function AdminClient() {
     return (round - 1) * nCoaches + pickInRound;
   }
 
-  // Load coaches + draft_order for this room
   async function loadData(room: string) {
     setLoadErr("");
     setSaveMsg("");
@@ -393,7 +384,6 @@ export default function AdminClient() {
     }
   }
 
-  // ✅ runs when roomId changes
   useEffect(() => {
     loadData(roomId.trim());
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -435,7 +425,6 @@ export default function AdminClient() {
     }
   }
 
-  // Build the grid for the selected block
   const blockGrid = useMemo(() => {
     if (!nCoaches) return null;
 
@@ -451,10 +440,6 @@ export default function AdminClient() {
     }
     return rounds;
   }, [block.from, block.to, nCoaches, edits, draftOrderByPick]);
-
-  // =========================================================
-  // ✅ Snake regen across the ENTIRE selected block
-  // =========================================================
 
   function blockOverallPickRange() {
     const start = (block.from - 1) * nCoaches + 1;
@@ -568,18 +553,10 @@ export default function AdminClient() {
     });
   }
 
-  const blockPickCount = useMemo(() => {
-    if (!nCoaches) return 0;
-    return (block.to - block.from + 1) * nCoaches;
-  }, [block.from, block.to, nCoaches]);
-
-  const changedCount = useMemo(() => Object.keys(edits).length, [edits]);
-  const willWriteCount = changedCount > 0 ? blockPickCount : 0;
-
   async function saveManualEdits() {
     setSaveMsg("");
     if (!roomId.trim()) return setSaveMsg("Room id is required.");
-    if (!changedCount) return setSaveMsg("No changes to save.");
+    if (!Object.keys(edits).length) return setSaveMsg("No changes to save.");
     if (!nCoaches) return setSaveMsg("No coaches/columns available.");
 
     const { start, end } = blockOverallPickRange();
@@ -695,15 +672,14 @@ export default function AdminClient() {
   }
 
   const editorLocked = resetBusy || saveBusy;
-
-  const anyBusy = busy || saveBusy || resetBusy || draftActionBusy;
+  const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || toolsBusy;
 
   return (
     <div style={{ padding: 16, maxWidth: 1200 }}>
       <h1 style={{ marginTop: 0 }}>Admin</h1>
 
-            {/* ✅ Admin Tools (Sim + Export) */}
-      <div style={{ border: "2px solid #e5e7eb",, borderRadius: 12, padding: 12, marginBottom: 14 }}>
+      {/* ✅ Admin Tools (Sim + Export) */}
+      <div style={{ border: "2px solid #e5e7eb", borderRadius: 12, padding: 12, marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
             <div style={{ fontWeight: 900, marginBottom: 4 }}>Admin Tools</div>
@@ -721,7 +697,7 @@ export default function AdminClient() {
               style={{
                 padding: "10px 12px",
                 borderRadius: 10,
-                border: "1px solid #222",
+                border: "2px solid #111",
                 background: toolsBusy ? "#aaa" : "#111",
                 color: "#fff",
                 fontWeight: 900,
@@ -739,10 +715,9 @@ export default function AdminClient() {
               style={{
                 padding: "10px 12px",
                 borderRadius: 10,
-                border: "1px solid #222",
+                border: "2px solid #111",
                 background: "#fff",
                 color: "#111",
-                border: "2px solid #111",
                 fontWeight: 900,
                 cursor: toolsBusy ? "not-allowed" : "pointer",
               }}
@@ -755,7 +730,7 @@ export default function AdminClient() {
       </div>
 
       {/* ✅ Draft Controls */}
-      <div style={{ border: "2px solid #e5e7eb",, borderRadius: 12, padding: 12, marginBottom: 14 }}>
+      <div style={{ border: "2px solid #e5e7eb", borderRadius: 12, padding: 12, marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
             <div style={{ fontWeight: 900, marginBottom: 4 }}>Draft Controls</div>
@@ -786,11 +761,9 @@ export default function AdminClient() {
               style={{
                 padding: "10px 12px",
                 borderRadius: 10,
-                border: "1px solid #222",
-                background: "#111",
-                background: "#fff",
-                color: "#111",
                 border: "2px solid #111",
+                background: "#111",
+                color: "#fff",
                 fontWeight: 900,
                 cursor: draftActionBusy ? "not-allowed" : "pointer",
               }}
@@ -806,12 +779,11 @@ export default function AdminClient() {
               style={{
                 padding: "10px 12px",
                 borderRadius: 10,
-                border: "1px solid #222",
+                border: "2px solid #111",
                 background: "#fff",
                 color: "#111",
-                border: "2px solid #111",
                 fontWeight: 900,
-                cursor: toolsBusy ? "not-allowed" : "pointer",
+                cursor: draftActionBusy ? "not-allowed" : "pointer",
               }}
               title="Pause or resume draft"
             >
@@ -825,7 +797,7 @@ export default function AdminClient() {
               style={{
                 padding: "10px 12px",
                 borderRadius: 10,
-                border: "1px solid #b91c1c",
+                border: "2px solid #b91c1c",
                 background: "#fff",
                 color: "#b91c1c",
                 fontWeight: 900,
@@ -897,9 +869,7 @@ export default function AdminClient() {
             onChange={(e) => setCoachIdsStr(e.target.value)}
             style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
           />
-          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>
-            Parsed: [{coachIdsParsed.join(", ")}]
-          </div>
+          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>Parsed: [{coachIdsParsed.join(", ")}]</div>
         </label>
 
         <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -939,17 +909,15 @@ export default function AdminClient() {
       </div>
 
       {/* Manual editor */}
-      <div style={{ marginTop: 18, border: "2px solid #e5e7eb",, borderRadius: 12, padding: 12 }}>
+      <div style={{ marginTop: 18, border: "2px solid #e5e7eb", borderRadius: 12, padding: 12 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
             <h2 style={{ margin: 0 }}>Manual Order Editor</h2>
             <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
               Room: <strong>{roomId.trim() || "(blank)"}</strong> • Block: <strong>{block.label}</strong>
-              {" • "}
-              Coaches: <strong>{coachOptions.length}</strong>{" "}
+              {" • "}Coaches: <strong>{coachOptions.length}</strong>{" "}
               {coachesSorted.length ? "(from coaches table)" : "(inferred from draft_order)"}
-              {" • "}
-              Picks loaded: <strong>{draftOrder.length}</strong>
+              {" • "}Picks loaded: <strong>{draftOrder.length}</strong>
             </div>
 
             <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
@@ -969,8 +937,8 @@ export default function AdminClient() {
             {Object.keys(edits).length > 0 ? (
               <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
                 Pending: <strong>{Object.keys(edits).length}</strong> edited picks in UI • Save will write{" "}
-                <strong>{Object.keys(edits).length > 0 ? (block.to - block.from + 1) * nCoaches : 0}</strong>{" "}
-                picks for <strong>{block.label}</strong>
+                <strong>{Object.keys(edits).length > 0 ? (block.to - block.from + 1) * nCoaches : 0}</strong> picks
+                for <strong>{block.label}</strong>
               </div>
             ) : null}
           </div>
@@ -1115,9 +1083,9 @@ export default function AdminClient() {
             </table>
 
             <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-              Tip: change any pick and the whole block is recalculated as a snake. Then hit{" "}
-              <strong>Save block</strong> to write it to <code>draft_order</code>. Use{" "}
-              <strong>Reset block</strong> to revert your unsaved edits (and auto-save if enabled).
+              Tip: change any pick and the whole block is recalculated as a snake. Then hit <strong>Save block</strong>{" "}
+              to write it to <code>draft_order</code>. Use <strong>Reset block</strong> to revert your unsaved edits
+              (and auto-save if enabled).
             </div>
           </div>
         )}
