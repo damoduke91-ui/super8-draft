@@ -29,6 +29,17 @@ type DraftOrderRow = {
   coach_id: number;
 };
 
+type Player = {
+  player_no: number;
+  pos: string;
+  club: string;
+  player_name: string;
+  average: number;
+  drafted_by_coach_id: number | null;
+  drafted_round: number | null;
+  drafted_pick: number | null;
+};
+
 const BLOCKS = [
   { label: "Rounds 1–2", from: 1, to: 2 },
   { label: "Rounds 3–10", from: 3, to: 10 },
@@ -40,6 +51,20 @@ const BLOCKS = [
 
 const ROOM_DISPLAY_NAME = "Super8 Draft";
 
+// Proxy pick tabs (same concept as DraftClient)
+const POS_TABS = ["ALL", "KD", "DEF", "MID", "FOR", "KF", "RUC"] as const;
+type PosTab = (typeof POS_TABS)[number];
+
+const POS_LABEL: Record<PosTab, string> = {
+  ALL: "All",
+  KD: "KD",
+  DEF: "DEF",
+  MID: "MID",
+  FOR: "FOR",
+  KF: "KF",
+  RUC: "RUC",
+};
+
 function pauseReasonLabel(pause_reason: string | null) {
   if (!pause_reason) return null;
   if (pause_reason.startsWith("WAIT_BLOCK_")) {
@@ -47,6 +72,30 @@ function pauseReasonLabel(pause_reason: string | null) {
     return `Waiting for Admin to set draft order for rounds ${block}…`;
   }
   return pause_reason;
+}
+
+function norm(s: string) {
+  return (s || "").toLowerCase().trim();
+}
+
+function splitPos(posRaw: string): string[] {
+  return (posRaw || "")
+    .split("/")
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function matchesTab(player: Player, tab: PosTab): boolean {
+  const tags = splitPos(player.pos);
+  if (tab === "ALL") return true;
+
+  if (tab === "DEF") return tags.includes("DEF") && !tags.includes("KD");
+  if (tab === "FOR") return tags.includes("FOR") && !tags.includes("KF");
+
+  if (tab === "KD") return tags.includes("KD");
+  if (tab === "KF") return tags.includes("KF");
+
+  return tags.includes(tab);
 }
 
 async function postJson(url: string, body: any) {
@@ -65,67 +114,54 @@ export default function AdminClient() {
 
   const roomFromUrl = sp.get("room") || "";
 
-  // ✅ split "what you type" vs "what the app uses"
   const [roomIdInput, setRoomIdInput] = useState(roomFromUrl || "DUMMY1");
   const [roomId, setRoomId] = useState((roomFromUrl || "DUMMY1").trim());
 
   const [blockIdx, setBlockIdx] = useState(0);
 
-  // generator controls
   const [coachIdsStr, setCoachIdsStr] = useState("1,2,3,4,5,6,7,8");
   const [shuffle, setShuffle] = useState(false);
   const [seed, setSeed] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string>("");
 
-  // manual editor state
   const [coaches, setCoaches] = useState<Coach[]>([]);
   const [draftOrder, setDraftOrder] = useState<DraftOrderRow[]>([]);
   const [loadErr, setLoadErr] = useState<string>("");
 
-  // local edits: overall_pick -> coach_id
   const [edits, setEdits] = useState<Record<number, number>>({});
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
 
-  // reset block button busy
   const [resetBusy, setResetBusy] = useState(false);
 
-  // ✅ pro toggle
   const [autoSaveAfterReset, setAutoSaveAfterReset] = useState(true);
 
-  // ✅ debug toggle
   const [showDebug, setShowDebug] = useState(false);
 
-  // force refresh of embedded DraftClient after save/generate/admin actions
   const [refreshKey, setRefreshKey] = useState(0);
 
   const block = BLOCKS[blockIdx];
-
-  // =========================================================
-  // ✅ Draft controls (Start / Pause / Reset)
-  // =========================================================
 
   const [draftState, setDraftState] = useState<DraftState | null>(null);
   const [draftStateErr, setDraftStateErr] = useState<string>("");
   const [draftActionBusy, setDraftActionBusy] = useState(false);
   const [draftActionMsg, setDraftActionMsg] = useState<string>("");
 
-  // =========================================================
-  // ✅ Simulator + Export tools
-  // =========================================================
   const [toolsBusy, setToolsBusy] = useState(false);
   const [toolsMsg, setToolsMsg] = useState("");
 
-  // =========================================================
-  // ✅ Absent coach proxy pick (UI only for now)
-  // =========================================================
   const [proxyCoachId, setProxyCoachId] = useState<number>(1);
   const [proxyMsg, setProxyMsg] = useState<string>("");
+  const [proxyBusy, setProxyBusy] = useState(false);
+  const [proxyErr, setProxyErr] = useState<string>("");
+  const [proxyPlayers, setProxyPlayers] = useState<Player[]>([]);
+  const [proxyTab, setProxyTab] = useState<PosTab>("ALL");
+  const [proxySearch, setProxySearch] = useState("");
+  const [proxySortKey, setProxySortKey] = useState<"player_no" | "player_name" | "club" | "average">("average");
+  const [proxySortDir, setProxySortDir] = useState<"asc" | "desc">("desc");
+  const [proxyShowDrafted, setProxyShowDrafted] = useState(false);
 
-  // =========================================================
-  // ✅ Shared field styles (fix unreadable dark inputs)
-  // =========================================================
   const fieldBase: React.CSSProperties = {
     width: "100%",
     padding: 10,
@@ -160,6 +196,7 @@ export default function AdminClient() {
         setToolsMsg(`✅ Sim complete: ${json?.picksDone ?? 0} picks (${json?.message || "done"})`);
         await loadDraftState(roomId.trim());
         await loadData(roomId.trim());
+        await loadProxyPlayers(roomId.trim());
         setRefreshKey((k) => k + 1);
       }
     } catch (e: any) {
@@ -184,9 +221,7 @@ export default function AdminClient() {
 
     const { data, error } = await supabase
       .from("draft_state")
-      .select(
-        "room_id,is_paused,pause_reason,rounds_total,current_round,current_pick_in_round,current_coach_id"
-      )
+      .select("room_id,is_paused,pause_reason,rounds_total,current_round,current_pick_in_round,current_coach_id")
       .eq("room_id", room.trim())
       .maybeSingle();
 
@@ -236,6 +271,7 @@ export default function AdminClient() {
       } else {
         setDraftActionMsg("✅ Draft started");
         await loadDraftState(roomId.trim());
+        await loadProxyPlayers(roomId.trim());
         setRefreshKey((k) => k + 1);
       }
     } catch (e: any) {
@@ -295,6 +331,7 @@ export default function AdminClient() {
         setDraftActionMsg("♻️ Draft reset");
         await loadDraftState(roomId.trim());
         await loadData(roomId.trim());
+        await loadProxyPlayers(roomId.trim());
         setRefreshKey((k) => k + 1);
       }
     } catch (e: any) {
@@ -309,10 +346,6 @@ export default function AdminClient() {
     const live = draftState.is_paused ? "PAUSED" : "LIVE";
     return `${live} • Round ${draftState.current_round}/${draftState.rounds_total} • Pick ${draftState.current_pick_in_round} • Coach ${draftState.current_coach_id}`;
   }, [draftState]);
-
-  // =========================================================
-  // ✅ Apply the room (only then do DB calls + DraftClient refresh)
-  // =========================================================
 
   function applyRoom(nextRoom?: string) {
     const next = (nextRoom ?? roomIdInput).trim();
@@ -357,6 +390,13 @@ export default function AdminClient() {
     }
     return inferredCoachIds.map((id) => ({ id, name: `Coach ${id}` }));
   }, [coachesSorted, inferredCoachIds]);
+
+  useEffect(() => {
+    if (!coachOptions.length) return;
+    const has = coachOptions.some((c) => c.id === proxyCoachId);
+    if (!has) setProxyCoachId(coachOptions[0].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coachOptions.length]);
 
   const nCoaches = coachOptions.length;
 
@@ -692,20 +732,130 @@ export default function AdminClient() {
     }
   }
 
-  // =========================================================
-  // ✅ Proxy pick (absent coach) - not wired yet
-  // =========================================================
-  async function proxyPickPlaceholder() {
-    // This will be wired to the same "make pick" flow as DraftClient once we paste DraftClient.tsx
-    setProxyMsg("Not wired yet — paste app/draft/DraftClient.tsx next and I will hook this into the real pick endpoint.");
+  async function loadProxyPlayers(room: string) {
+    setProxyErr("");
+    if (!room.trim()) {
+      setProxyPlayers([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("players")
+      .select("player_no,pos,club,player_name,average,drafted_by_coach_id,drafted_round,drafted_pick")
+      .eq("room_id", room.trim());
+
+    if (error) {
+      setProxyErr(`Players load error: ${error.message}`);
+      setProxyPlayers([]);
+      return;
+    }
+
+    setProxyPlayers((data as Player[]) || []);
+  }
+
+  useEffect(() => {
+    loadProxyPlayers(roomId.trim());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
+
+  useEffect(() => {
+    if (!roomId.trim()) return;
+    loadProxyPlayers(roomId.trim());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+
+  const proxyCoachName = useMemo(() => {
+    const found = coachOptions.find((c) => c.id === proxyCoachId);
+    return found?.name ?? `Coach ${proxyCoachId}`;
+  }, [coachOptions, proxyCoachId]);
+
+  const proxyFiltered = useMemo(() => {
+    let list = proxyPlayers;
+
+    if (!proxyShowDrafted) list = list.filter((p) => p.drafted_by_coach_id == null);
+    list = list.filter((p) => matchesTab(p, proxyTab));
+
+    const q = norm(proxySearch);
+    if (q) {
+      list = list.filter((p) => {
+        const hay = [String(p.player_no), p.player_name, p.club, p.pos, String(p.average ?? "")]
+          .map(norm)
+          .join(" | ");
+        return hay.includes(q);
+      });
+    }
+
+    list = list.slice().sort((a, b) => {
+      const dir = proxySortDir === "asc" ? 1 : -1;
+      if (proxySortKey === "player_no") return (a.player_no - b.player_no) * dir;
+      if (proxySortKey === "average") return ((a.average ?? 0) - (b.average ?? 0)) * dir;
+      if (proxySortKey === "club") return a.club.localeCompare(b.club) * dir;
+      return a.player_name.localeCompare(b.player_name) * dir;
+    });
+
+    return list;
+  }, [proxyPlayers, proxyShowDrafted, proxyTab, proxySearch, proxySortKey, proxySortDir]);
+
+  function toggleProxySort(key: typeof proxySortKey) {
+    if (key === proxySortKey) setProxySortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setProxySortKey(key);
+      setProxySortDir(key === "average" ? "desc" : "asc");
+    }
+  }
+
+  async function proxyDraftPlayer(p: Player) {
+    setProxyMsg("");
+    setProxyErr("");
+
+    const room = roomId.trim();
+    if (!room) return setProxyErr("Room id is required.");
+    if (!draftState) return setProxyErr("Draft not started yet (no draft_state row). Start the draft first.");
+    if (draftState.is_paused) return setProxyErr(pauseReasonLabel(draftState.pause_reason) ?? "Draft is paused.");
+    if (proxyBusy) return;
+    if (p.drafted_by_coach_id != null) return setProxyErr("That player is already drafted.");
+
+    const ok = window.confirm(
+      `Draft this player for ${proxyCoachName}?\n\n#${p.player_no} — ${p.player_name}\n${p.club} • ${p.pos} • Avg ${p.average}\n\nThis uses ADMIN override for absent-coach emergencies.`
+    );
+    if (!ok) return;
+
+    setProxyBusy(true);
+    try {
+      const { data, error } = await supabase.rpc("draft_pick", {
+        p_room_id: room,
+        p_player_no: p.player_no,
+        p_coach_id: proxyCoachId,
+        p_override_turn: true,
+      });
+
+      if (error) {
+        setProxyErr(`Draft failed: ${error.message}`);
+        return;
+      }
+
+      const res = Array.isArray(data) ? data[0] : data;
+      if (!res?.ok) {
+        setProxyErr(`Draft failed: ${res?.message ?? "Unknown error"}`);
+        return;
+      }
+
+      setProxyMsg(`✅ Drafted #${p.player_no} (${p.player_name}) for ${proxyCoachName}`);
+      await loadDraftState(room);
+      await loadProxyPlayers(room);
+      setRefreshKey((k) => k + 1);
+    } catch (e: any) {
+      setProxyErr(`Draft failed: ${e?.message || String(e)}`);
+    } finally {
+      setProxyBusy(false);
+    }
   }
 
   const editorLocked = resetBusy || saveBusy;
-  const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || toolsBusy;
+  const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || toolsBusy || proxyBusy;
 
   return (
     <Page title="Super8 Draft — Admin" subtitle="Draft control centre">
-      {/* ✅ Draft Controls */}
       <Card title="Draft Controls">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
@@ -747,7 +897,6 @@ export default function AdminClient() {
         </div>
       </Card>
 
-      {/* ✅ Snake generator */}
       <Card title="Snake Generator" right={<SmallText>Room: <strong>{ROOM_DISPLAY_NAME}</strong></SmallText>}>
         <div style={{ display: "grid", gap: 10, maxWidth: 760 }}>
           <label>
@@ -799,20 +948,23 @@ export default function AdminClient() {
         </div>
       </Card>
 
-      {/* ✅ Admin proxy pick (absent coach) */}
-      <Card title="Admin Proxy Pick (Absent Coach)">
+      <Card
+        title="Admin Proxy Pick (Absent Coach)"
+        right={
+          <SmallText>
+            room: <strong>{ROOM_DISPLAY_NAME}</strong>
+            {proxyBusy ? <span style={{ marginLeft: 8, opacity: 0.8 }}>• drafting…</span> : null}
+          </SmallText>
+        }
+      >
         <SmallText>
-          Use this only if a coach is absent. This will draft on their behalf (once wired to the real pick endpoint).
+          Use only if a coach is absent. This drafts on their behalf on the <strong>Admin screen</strong> (no new page).
         </SmallText>
 
         <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <div style={{ minWidth: 240 }}>
             <div style={{ fontWeight: 900, marginBottom: 6 }}>Coach</div>
-            <select
-              value={proxyCoachId}
-              onChange={(e) => setProxyCoachId(Number(e.target.value))}
-              style={fieldBase}
-            >
+            <select value={proxyCoachId} onChange={(e) => setProxyCoachId(Number(e.target.value))} style={fieldBase}>
               {coachOptions.length
                 ? coachOptions.map((c) => (
                     <option key={c.id} value={c.id}>
@@ -827,20 +979,178 @@ export default function AdminClient() {
             </select>
           </div>
 
-          <Button variant="primary" onClick={proxyPickPlaceholder} disabled={anyBusy || !roomId.trim()}>
-            Draft for Coach {proxyCoachId}
-          </Button>
+          <div style={{ flex: 1, minWidth: 260 }}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Search</div>
+            <input
+              suppressHydrationWarning
+              value={proxySearch}
+              onChange={(e) => setProxySearch(e.target.value)}
+              placeholder="Search name / club / # / pos…"
+              style={fieldBase}
+            />
+          </div>
 
-          {proxyMsg ? <div style={{ fontWeight: 950 }}>{proxyMsg}</div> : null}
+          <Button
+            onClick={() => {
+              setProxyMsg("");
+              setProxyErr("");
+              loadProxyPlayers(roomId.trim());
+            }}
+            disabled={anyBusy || !roomId.trim()}
+          >
+            Refresh players
+          </Button>
         </div>
 
-        <SmallText>
-          Next step: paste <code>app/draft/DraftClient.tsx</code> so I can wire this into the exact same pick logic your
-          coaches use (no duplicate systems).
-        </SmallText>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
+          {POS_TABS.map((k) => {
+            const active = proxyTab === k;
+            return (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setProxyTab(k)}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 10,
+                  border: active ? "2px solid #111" : "1px solid #d1d5db",
+                  background: active ? "#111" : "#fff",
+                  color: active ? "#fff" : "#111",
+                  fontWeight: 950,
+                  cursor: "pointer",
+                }}
+              >
+                {POS_LABEL[k]}
+              </button>
+            );
+          })}
+
+          <button
+            type="button"
+            onClick={() => setProxyShowDrafted((v) => !v)}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 10,
+              border: "1px solid #d1d5db",
+              background: proxyShowDrafted ? "#fff6d6" : "#fff",
+              color: "#111",
+              fontWeight: 950,
+              cursor: "pointer",
+            }}
+            title="Show/hide drafted players"
+          >
+            {proxyShowDrafted ? "Showing drafted too" : "Available only"}
+          </button>
+        </div>
+
+        {proxyErr ? (
+          <div
+            style={{
+              marginTop: 10,
+              padding: 10,
+              borderRadius: 12,
+              border: "1px solid #f2c2c2",
+              background: "#fff5f5",
+              fontWeight: 900,
+            }}
+          >
+            {proxyErr}
+          </div>
+        ) : null}
+
+        {proxyMsg ? <div style={{ marginTop: 10, fontWeight: 950 }}>{proxyMsg}</div> : null}
+
+        <div style={{ marginTop: 10 }}>
+          <SmallText>
+            Sorting:{" "}
+            <button type="button" onClick={() => toggleProxySort("average")} style={{ fontWeight: 900 }}>
+              Avg
+            </button>{" "}
+            ·{" "}
+            <button type="button" onClick={() => toggleProxySort("player_no")} style={{ fontWeight: 900 }}>
+              #
+            </button>{" "}
+            ·{" "}
+            <button type="button" onClick={() => toggleProxySort("player_name")} style={{ fontWeight: 900 }}>
+              Name
+            </button>{" "}
+            ·{" "}
+            <button type="button" onClick={() => toggleProxySort("club")} style={{ fontWeight: 900 }}>
+              Club
+            </button>{" "}
+            <span style={{ opacity: 0.75 }}>
+              ({proxySortKey} {proxySortDir}) • showing <strong>{proxyFiltered.length}</strong>
+            </span>
+          </SmallText>
+        </div>
+
+        <div style={{ marginTop: 10, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>#</th>
+                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Player</th>
+                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Pos</th>
+                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Club</th>
+                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Avg</th>
+                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {proxyFiltered.slice(0, 120).map((p) => {
+                const drafted = p.drafted_by_coach_id != null;
+                const disabled = proxyBusy || !draftState || !!draftState?.is_paused || drafted || !roomId.trim();
+
+                return (
+                  <tr key={p.player_no} style={{ opacity: disabled ? 0.75 : 1 }}>
+                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6", fontWeight: 950 }}>{p.player_no}</td>
+                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6", fontWeight: 900 }}>
+                      {p.player_name}
+                      {drafted ? (
+                        <div style={{ marginTop: 2, fontSize: 12, opacity: 0.75 }}>
+                          Drafted by Coach {p.drafted_by_coach_id} ({p.drafted_round}.{p.drafted_pick})
+                        </div>
+                      ) : null}
+                    </td>
+                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{p.pos}</td>
+                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{p.club}</td>
+                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{p.average}</td>
+                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>
+                      <Button variant="primary" onClick={() => proxyDraftPlayer(p)} disabled={disabled}>
+                        {proxyBusy ? "Drafting..." : `Draft for ${proxyCoachName}`}
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {proxyFiltered.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ padding: 10, opacity: 0.75 }}>
+                    No players match your filters.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+
+          {proxyFiltered.length > 120 ? (
+            <div style={{ marginTop: 8 }}>
+              <SmallText>
+                Showing first <strong>120</strong> results (to keep Admin fast). Narrow with search/tabs.
+              </SmallText>
+            </div>
+          ) : null}
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <SmallText>
+            Safety rules: proxy draft is blocked if the draft is <strong>paused</strong>. It uses{" "}
+            <code>p_override_turn: true</code> so Admin can draft for an absent coach even if it’s not that coach’s pick.
+          </SmallText>
+        </div>
       </Card>
 
-      {/* Manual editor */}
       <Card title="Manual Order Editor">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
@@ -1048,7 +1358,6 @@ export default function AdminClient() {
         )}
       </Card>
 
-      {/* Live board */}
       <Card
         title="Live Draft Board"
         right={
@@ -1058,11 +1367,9 @@ export default function AdminClient() {
           </SmallText>
         }
       >
-        {/* Step 4: pass admin mode so we can hide Analytics/My Draft Sheet/selection tools in DraftClient */}
-        <DraftClient key={`${roomId.trim()}-${refreshKey}`} mode="admin" />
+        <DraftClient key={`${roomId.trim()}-${refreshKey}`} />
       </Card>
 
-      {/* ✅ Admin Tools moved to bottom */}
       <Card
         title="Admin Tools"
         right={
@@ -1098,7 +1405,6 @@ export default function AdminClient() {
               </div>
             </div>
 
-            {/* Debug section */}
             <div style={{ paddingTop: 4 }}>
               <SmallText>
                 Real room id in use:{" "}
