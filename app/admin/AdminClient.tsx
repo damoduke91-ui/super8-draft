@@ -105,6 +105,52 @@ export default function AdminClient() {
   const [draftActionBusy, setDraftActionBusy] = useState(false);
   const [draftActionMsg, setDraftActionMsg] = useState<string>("");
 
+    // =========================================================
+  // ✅ Simulator + Export tools
+  // =========================================================
+  const [toolsBusy, setToolsBusy] = useState(false);
+  const [toolsMsg, setToolsMsg] = useState("");
+
+  async function simulate2CoachDraft() {
+    setToolsMsg("");
+    if (!roomId.trim()) return setToolsMsg("Room id is required.");
+
+    const ok = window.confirm(
+      `Simulate a FULL draft for 2 coaches in room "${roomId.trim()}"?\n\nThis will make many picks and write them to draft_picks.\nMake sure the room has only 2 coaches (or is intended for 2-coach sim).`
+    );
+    if (!ok) return;
+
+    setToolsBusy(true);
+    try {
+      const { res, json } = await postJson("/api/admin/simulate-draft", {
+        roomId: roomId.trim(),
+        coachIds: [1, 2],
+        rounds: 46,
+        pickRule: "highest_average",
+      });
+
+      if (!res.ok || !json?.ok) {
+        setToolsMsg(`Sim failed: ${json?.error || json?.message || "Unknown error"}`);
+      } else {
+        setToolsMsg(`✅ Sim complete: ${json?.picksDone ?? 0} picks (${json?.message || "done"})`);
+        await loadDraftState(roomId.trim());
+        await loadData(roomId.trim());
+        setRefreshKey((k) => k + 1);
+      }
+    } catch (e: any) {
+      setToolsMsg(`Sim failed: ${e?.message || String(e)}`);
+    } finally {
+      setToolsBusy(false);
+    }
+  }
+
+  function exportPicksCsv() {
+    setToolsMsg("");
+    if (!roomId.trim()) return setToolsMsg("Room id is required.");
+    // Opens CSV download in a new tab
+    window.open(`/api/admin/export-picks?room=${encodeURIComponent(roomId.trim())}`, "_blank");
+  }
+
   async function loadDraftState(room: string) {
     setDraftStateErr("");
     if (!room.trim()) {
@@ -655,6 +701,56 @@ export default function AdminClient() {
   return (
     <div style={{ padding: 16, maxWidth: 1200 }}>
       <h1 style={{ marginTop: 0 }}>Admin</h1>
+
+            {/* ✅ Admin Tools (Sim + Export) */}
+      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontWeight: 900, marginBottom: 4 }}>Admin Tools</div>
+            <div style={{ fontSize: 12, opacity: 0.8 }}>
+              Simulate a 2-coach draft and export picks as CSV (from <code>draft_picks</code>).
+            </div>
+            {toolsMsg ? <div style={{ marginTop: 8, fontWeight: 900 }}>{toolsMsg}</div> : null}
+          </div>
+
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={simulate2CoachDraft}
+              disabled={toolsBusy || !roomId.trim()}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #222",
+                background: toolsBusy ? "#aaa" : "#111",
+                color: "#fff",
+                fontWeight: 900,
+                cursor: toolsBusy ? "not-allowed" : "pointer",
+              }}
+              title="Auto-pick a full draft for 2 coaches (writes to draft_picks)"
+            >
+              {toolsBusy ? "Simulating..." : "Simulate 2-coach draft"}
+            </button>
+
+            <button
+              type="button"
+              onClick={exportPicksCsv}
+              disabled={toolsBusy || !roomId.trim()}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #222",
+                background: "#fff",
+                fontWeight: 900,
+                cursor: toolsBusy ? "not-allowed" : "pointer",
+              }}
+              title="Download picks as CSV"
+            >
+              Export picks (CSV)
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* ✅ Draft Controls */}
       <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, marginBottom: 14 }}>
