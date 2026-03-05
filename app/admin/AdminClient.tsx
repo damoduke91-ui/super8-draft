@@ -690,9 +690,10 @@ export default function AdminClient() {
   const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || toolsBusy;
 
   return (
-    <Page title="Admin" subtitle={`Manage draft controls and order for ${ROOM_DISPLAY_NAME}.`}>
-      {/* ✅ Admin Tools */}
-      <Card
+    <Page title="Super8 Draft — Admin" subtitle="Draft control centre">
+      {/* ✅ Admin Tools (Debug only) */}
+        {showDebug ? (
+        <Card
         title="Admin Tools"
         right={
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -724,6 +725,7 @@ export default function AdminClient() {
           </div>
         </div>
       </Card>
+        ) : null}
 
       {/* ✅ Debug (hidden by default) */}
       {showDebug ? (
