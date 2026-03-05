@@ -13,13 +13,37 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json()) as Body;
     const roomId = (body.roomId ?? "").trim();
-    const coachIds = (body.coachIds?.length ? body.coachIds : [1, 2]).slice(0, 2);
+    const coachIds = [1, 2];
     const rounds = Number.isFinite(body.rounds) ? Number(body.rounds) : 46;
 
     if (!roomId) return NextResponse.json({ ok: false, error: "roomId is required" }, { status: 400 });
     if (coachIds.length !== 2) {
       return NextResponse.json({ ok: false, error: "coachIds must be exactly 2 (e.g. [1,2])" }, { status: 400 });
     }
+
+    // ---------------------------------------------------
+// RESET simulation data
+// ---------------------------------------------------
+
+await supabaseAdmin
+  .from("draft_picks")
+  .delete()
+  .eq("room_id", roomId);
+
+await supabaseAdmin
+  .from("players")
+  .update({
+    drafted_by_coach_id: null,
+    drafted_round: null,
+    drafted_pick: null,
+  })
+  .eq("room_id", roomId);
+
+// remove any existing draft order
+await supabaseAdmin
+  .from("draft_order")
+  .delete()
+  .eq("room_id", roomId);
 
     // 1) Ensure draft_order exists for this room (2-coach snake)
     const totalPicks = rounds * 2;
