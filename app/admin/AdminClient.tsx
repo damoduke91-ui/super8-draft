@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import DraftClient from "../draft/DraftClient";
 import { supabase } from "../lib/supabase";
@@ -154,6 +154,12 @@ export default function AdminClient() {
   const [simRounds, setSimRounds] = useState("46");
   const [resetDraftBeforeSim, setResetDraftBeforeSim] = useState(true);
 
+  const [simProgressStart, setSimProgressStart] = useState(0);
+  const [simProgressCurrent, setSimProgressCurrent] = useState(0);
+  const [simProgressTotal, setSimProgressTotal] = useState(368);
+  const [simProgressLabel, setSimProgressLabel] = useState("Waiting to start...");
+  const simProgressTimerRef = useRef<number | null>(null);
+
   const [proxyCoachId, setProxyCoachId] = useState<number>(1);
   const [proxyMsg, setProxyMsg] = useState<string>("");
   const [proxyBusy, setProxyBusy] = useState(false);
@@ -182,6 +188,67 @@ export default function AdminClient() {
       .filter((n) => Number.isFinite(n) && n > 0);
   }, [manualCoachIdsStr]);
 
+  const simProgressMade = Math.max(0, simProgressCurrent - simProgressStart);
+  const simProgressMax = Math.max(1, simProgressTotal - simProgressStart);
+  const simProgressPct = Math.max(0, Math.min(100, Math.round((simProgressMade / simProgressMax) * 100)));
+
+  async function fetchDraftPickCount(room: string) {
+    const { count, error } = await supabase
+      .from("draft_picks")
+      .select("*", { count: "exact", head: true })
+      .eq("room_id", room);
+
+    if (error) throw new Error(error.message);
+    return count ?? 0;
+  }
+
+  function stopSimProgressPolling() {
+    if (simProgressTimerRef.current != null) {
+      window.clearInterval(simProgressTimerRef.current);
+      simProgressTimerRef.current = null;
+    }
+  }
+
+  function startSimProgressPolling(room: string, roundsNum: number, resetFirst: boolean) {
+    stopSimProgressPolling();
+
+    const total = roundsNum * 8;
+    setSimProgressTotal(total);
+    setSimProgressStart(resetFirst ? 0 : simProgressCurrent);
+    setSimProgressLabel("Preparing simulation...");
+
+    const poll = async () => {
+      try {
+        const count = await fetchDraftPickCount(room);
+        setSimProgressCurrent(count);
+
+        const currentRound = draftState?.current_round;
+        const currentPick = draftState?.current_pick_in_round;
+        const currentCoach = draftState?.current_coach_id;
+
+        if (currentRound && currentPick && currentCoach) {
+          setSimProgressLabel(`Round ${currentRound} • Pick ${currentPick} • Coach ${currentCoach}`);
+        } else {
+          setSimProgressLabel(`Processed ${count} picks so far...`);
+        }
+      } catch {
+        // keep UI alive even if a single poll fails
+      }
+    };
+
+    void poll();
+
+    simProgressTimerRef.current = window.setInterval(() => {
+      void poll();
+    }, 500);
+  }
+
+  useEffect(() => {
+    return () => {
+      stopSimProgressPolling();
+    };
+  }, []);
+
   async function simulate8CoachDraft() {
     setToolsMsg("");
     if (!roomId.trim()) return setToolsMsg("Room id is required.");
@@ -202,7 +269,15 @@ export default function AdminClient() {
     if (!ok) return;
 
     setToolsBusy(true);
+
     try {
+      const existingCount = resetDraftBeforeSim ? 0 : await fetchDraftPickCount(roomId.trim());
+      setSimProgressStart(existingCount);
+      setSimProgressCurrent(existingCount);
+      setSimProgressTotal(roundsNum * 8);
+      setSimProgressLabel("Starting simulation...");
+      startSimProgressPolling(roomId.trim(), roundsNum, resetDraftBeforeSim);
+
       const { res, json } = await postJson("/api/admin/simulate-draft", {
         roomId: roomId.trim(),
         rounds: roundsNum,
@@ -210,14 +285,28 @@ export default function AdminClient() {
         resetDraft: resetDraftBeforeSim,
       });
 
+      stopSimProgressPolling();
+
+      try {
+        const finalCount = await fetchDraftPickCount(roomId.trim());
+        setSimProgressCurrent(finalCount);
+      } catch {
+        // ignore final count failure
+      }
+
       if (!res.ok || !json?.ok) {
         setToolsMsg(`Sim failed: ${json?.error || json?.message || "Unknown error"}`);
+        setSimProgressLabel("Simulation failed");
       } else if (json?.status === "waiting_for_manual_pick") {
         setToolsMsg(
           `⏸️ Sim paused for manual coach ${json?.stoppedForCoachId ?? "?"} at overall pick ${json?.stoppedAtOverallPick ?? "?"}.`
         );
+        setSimProgressLabel(
+          `Waiting for manual coach ${json?.stoppedForCoachId ?? "?"} at overall pick ${json?.stoppedAtOverallPick ?? "?"}`
+        );
       } else {
         setToolsMsg(`✅ Sim complete: ${json?.picksDone ?? 0} picks (${json?.message || "done"})`);
+        setSimProgressLabel("Simulation complete");
       }
 
       await loadDraftState(roomId.trim());
@@ -225,7 +314,9 @@ export default function AdminClient() {
       await loadProxyPlayers(roomId.trim());
       setRefreshKey((k) => k + 1);
     } catch (e: any) {
+      stopSimProgressPolling();
       setToolsMsg(`Sim failed: ${e?.message || String(e)}`);
+      setSimProgressLabel("Simulation failed");
     } finally {
       setToolsBusy(false);
     }
@@ -1458,6 +1549,53 @@ export default function AdminClient() {
                   />
                   <span style={{ fontWeight: 900 }}>Reset draft before simulation</span>
                 </label>
+
+                <div
+                  style={{
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 12,
+                    padding: 12,
+                    background: "#fff",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 950 }}>Simulation Progress</div>
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>
+                      {simProgressCurrent} / {simProgressTotal} picks
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 10,
+                      width: "100%",
+                      height: 14,
+                      borderRadius: 999,
+                      background: "#e5e7eb",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${simProgressPct}%`,
+                        height: "100%",
+                        background: "#111",
+                        transition: "width 180ms ease",
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900 }}>
+                    {simProgressPct}% • {simProgressLabel}
+                  </div>
+
+                  {draftState ? (
+                    <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
+                      Draft state: Round {draftState.current_round} • Pick {draftState.current_pick_in_round} • Coach{" "}
+                      {draftState.current_coach_id}
+                    </div>
+                  ) : null}
+                </div>
 
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   <Button variant="primary" onClick={simulate8CoachDraft} disabled={toolsBusy || !roomId.trim()}>
