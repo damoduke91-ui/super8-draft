@@ -205,6 +205,40 @@ function mergeCustomOrder(savedOrder: number[], players: Player[]) {
   return [...kept, ...missing];
 }
 
+async function loadCustomOrderFromSupabase(room: string, coachId: number) {
+  const res = await fetch(
+    `/api/coach/custom-order?roomId=${encodeURIComponent(room)}&coachId=${coachId}`,
+    { cache: "no-store" }
+  );
+
+  const json = await res.json().catch(() => ({}));
+
+  if (!res.ok || !json?.ok) {
+    console.error("Failed loading custom order", json);
+    return [];
+  }
+
+  return Array.isArray(json.order) ? json.order.map((r: { player_no: number }) => r.player_no) : [];
+}
+
+async function saveCustomOrderToSupabase(room: string, coachId: number, order: number[]) {
+  const res = await fetch("/api/coach/custom-order", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      roomId: room,
+      coachId,
+      order,
+    }),
+  });
+
+  const json = await res.json().catch(() => ({}));
+
+  if (!res.ok || !json?.ok) {
+    console.error("Failed saving custom order", json);
+  }
+}
+
 export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const pathname = usePathname();
   const isAdminRoute = pathname?.startsWith("/admin") ?? false;
@@ -239,8 +273,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const [customOrder, setCustomOrder] = useState<number[]>([]);
 
   const skipKey = useMemo(() => `super8_skip_confirm:${room}:${coachId}`, [room, coachId]);
-  const customOrderKey = useMemo(() => `super8_custom_order:${room}:${coachId}`, [room, coachId]);
-
+  
   const pollTimerRef = useRef<number | null>(null);
   const timersRef = useRef<Record<string, any>>({});
   const prevIsMyTurnRef = useRef(false);
@@ -258,6 +291,9 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   }, [skipKey]);
 
   useEffect(() => {
+  let cancelled = false;
+
+  async function run() {
     if (!canUseCustomSort) {
       setCustomOrder([]);
       if (sortKey === "custom") setSortKey("player_no");
@@ -265,30 +301,35 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     }
 
     try {
-      const raw = localStorage.getItem(customOrderKey);
-      const saved = raw ? (JSON.parse(raw) as number[]) : [];
+      const saved = await loadCustomOrderFromSupabase(room, coachId);
+      if (cancelled) return;
+
       const merged = mergeCustomOrder(saved, players);
       const fallback = buildDefaultCustomOrder(players);
       const next = merged.length > 0 ? merged : fallback;
       setCustomOrder(next);
 
-      if (!raw && next.length > 0) {
-        localStorage.setItem(customOrderKey, JSON.stringify(next));
+      if (saved.length === 0 && next.length > 0) {
+        await saveCustomOrderToSupabase(room, coachId, next);
       }
     } catch {
+      if (cancelled) return;
       const fallback = buildDefaultCustomOrder(players);
       setCustomOrder(fallback);
     }
-  }, [customOrderKey, players, canUseCustomSort, sortKey]);
+  }
+
+  void run();
+
+  return () => {
+    cancelled = true;
+  };
+}, [room, coachId, players, canUseCustomSort, sortKey]);
 
   function saveCustomOrder(nextOrder: number[]) {
-    setCustomOrder(nextOrder);
-    try {
-      localStorage.setItem(customOrderKey, JSON.stringify(nextOrder));
-    } catch {
-      // ignore
-    }
-  }
+  setCustomOrder(nextOrder);
+  void saveCustomOrderToSupabase(room, coachId, nextOrder);
+}
 
   function schedule(key: "state" | "players" | "coaches" | "order", fn: () => void, ms = 150) {
     if (timersRef.current[key]) clearTimeout(timersRef.current[key]);
