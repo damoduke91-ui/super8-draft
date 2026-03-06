@@ -49,7 +49,7 @@ const BLOCKS = [
   { label: "Rounds 41–46", from: 41, to: 46 },
 ] as const;
 
-const ROOM_DISPLAY_NAME = "Super8 Draft";
+const ROOM_DISPLAY_NAME = "Super 8 Room";
 
 const POS_TABS = ["ALL", "KD", "DEF", "MID", "FOR", "KF", "RUC"] as const;
 type PosTab = (typeof POS_TABS)[number];
