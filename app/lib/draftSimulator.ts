@@ -84,6 +84,10 @@ type CoachPlan = {
   counts: Record<Group, number>;
 };
 
+type ExistingDraftedPlayer = PlayerRow & {
+  resolved_overall_pick: number;
+};
+
 function splitPos(posRaw: string): string[] {
   return (posRaw || "")
     .split("/")
@@ -207,6 +211,10 @@ function overallToRoundPick(overallPick: number, coachCount: number) {
   return { round, pickInRound };
 }
 
+function roundPickToOverall(round: number, pickInRound: number, coachCount: number) {
+  return (round - 1) * coachCount + pickInRound;
+}
+
 function uniqueSortedCoachIds(orderRows: DraftOrderRow[]): number[] {
   return Array.from(new Set(orderRows.map((r) => r.coach_id))).sort((a, b) => a - b);
 }
@@ -259,6 +267,23 @@ function findMissingRoundRanges(orderRows: DraftOrderRow[], rounds: number, coac
   }
 
   return compressRoundNumbersToRanges(Array.from(missingRounds));
+}
+
+function getDraftedPlayersFromPlayers(players: PlayerRow[], coachCount: number): ExistingDraftedPlayer[] {
+  return players
+    .filter(
+      (p) =>
+        p.drafted_by_coach_id != null &&
+        p.drafted_round != null &&
+        p.drafted_pick != null &&
+        p.drafted_round > 0 &&
+        p.drafted_pick > 0
+    )
+    .map((p) => ({
+      ...p,
+      resolved_overall_pick: roundPickToOverall(p.drafted_round!, p.drafted_pick!, coachCount),
+    }))
+    .sort((a, b) => a.resolved_overall_pick - b.resolved_overall_pick);
 }
 
 export async function runDraftSimulation(params: SimulateDraftParams): Promise<SimulateDraftResult> {
@@ -351,19 +376,6 @@ export async function runDraftSimulation(params: SimulateDraftParams): Promise<S
     if (draftStateErr) throw new Error(`draft_state reset error: ${draftStateErr.message}`);
   }
 
-  const { data: picksRaw, error: picksErr } = await supabaseAdmin
-    .from("draft_picks")
-    .select("room_id,overall_pick,round,pick_in_round,coach_id,player_no,created_at")
-    .eq("room_id", roomId)
-    .order("overall_pick", { ascending: true });
-
-  if (picksErr) {
-    throw new Error(`draft_picks load error: ${picksErr.message}`);
-  }
-
-  const existingPicks = (picksRaw ?? []) as DraftPickRow[];
-  const existingPickCount = existingPicks.length;
-
   const { data: playersRaw, error: playersErr } = await supabaseAdmin
     .from("players")
     .select("room_id,player_no,pos,club,player_name,average,drafted_by_coach_id,drafted_round,drafted_pick")
@@ -378,21 +390,21 @@ export async function runDraftSimulation(params: SimulateDraftParams): Promise<S
     throw new Error("No players found in this room.");
   }
 
+  const existingDraftedPlayers = getDraftedPlayersFromPlayers(allPlayers, coachCount);
+  const existingPickCount = existingDraftedPlayers.length;
+
   const coachPlans = new Map<number, CoachPlan>();
   for (const coachId of coachIds) coachPlans.set(coachId, emptyCoachPlan());
 
-  const playerByNo = new Map<number, PlayerRow>();
-  for (const player of allPlayers) playerByNo.set(player.player_no, player);
-
-  for (const pick of existingPicks) {
-    const plan = coachPlans.get(pick.coach_id);
-    const player = playerByNo.get(pick.player_no);
-    if (plan && player) {
-      applyPlayerToPlan(player, plan);
+  for (const draftedPlayer of existingDraftedPlayers) {
+    const coachId = draftedPlayer.drafted_by_coach_id!;
+    const plan = coachPlans.get(coachId);
+    if (plan) {
+      applyPlayerToPlan(draftedPlayer, plan);
     }
   }
 
-  const draftedPlayerNos = new Set<number>(existingPicks.map((p) => p.player_no));
+  const draftedPlayerNos = new Set<number>(existingDraftedPlayers.map((p) => p.player_no));
 
   const pool = allPlayers
     .filter((p) => !draftedPlayerNos.has(p.player_no) && p.drafted_by_coach_id == null)
