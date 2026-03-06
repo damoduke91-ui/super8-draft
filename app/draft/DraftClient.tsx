@@ -174,6 +174,11 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
 
   const skipKey = useMemo(() => `super8_skip_confirm:${room}:${coachId}`, [room, coachId]);
 
+  const pollTimerRef = useRef<number | null>(null);
+  const timersRef = useRef<Record<string, any>>({});
+  const prevIsMyTurnRef = useRef(false);
+  const lastAlertedPickRef = useRef<string>("");
+
   useEffect(() => {
     try {
       const v = localStorage.getItem(skipKey);
@@ -182,8 +187,6 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       setSkipConfirm(false);
     }
   }, [skipKey]);
-
-  const timersRef = useRef<Record<string, any>>({});
 
   function schedule(key: "state" | "players" | "coaches" | "order", fn: () => void, ms = 150) {
     if (timersRef.current[key]) clearTimeout(timersRef.current[key]);
@@ -277,7 +280,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     }
   }
 
-  async function initialLoad() {
+  async function refreshAll() {
     await Promise.all([loadState(), loadPlayers(), loadCoaches(), loadDraftOrder()]);
   }
 
@@ -285,7 +288,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     for (const k of Object.keys(timersRef.current)) clearTimeout(timersRef.current[k]);
     timersRef.current = {};
 
-    void initialLoad();
+    void refreshAll();
 
     const ch = supabase.channel(`draft_room_${room}`);
 
@@ -298,7 +301,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     ch.on(
       "postgres_changes",
       { event: "*", schema: "public", table: "players", filter: `room_id=eq.${room}` },
-      () => schedule("players", loadPlayers, 250)
+      () => schedule("players", loadPlayers, 180)
     );
 
     ch.on(
@@ -315,8 +318,23 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
 
     ch.subscribe();
 
+    if (pollTimerRef.current != null) {
+      window.clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+
+    pollTimerRef.current = window.setInterval(() => {
+      void refreshAll();
+    }, 1000);
+
     return () => {
       supabase.removeChannel(ch);
+
+      if (pollTimerRef.current != null) {
+        window.clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+
       for (const k of Object.keys(timersRef.current)) clearTimeout(timersRef.current[k]);
       timersRef.current = {};
     };
@@ -381,6 +399,24 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   }, [players, nCoaches]);
 
   const isMyTurn = !!state && !state.is_paused && state.current_coach_id === coachId;
+
+  useEffect(() => {
+    const nowMyTurn = isMyTurn;
+    const wasMyTurn = prevIsMyTurnRef.current;
+
+    if (nowMyTurn && !wasMyTurn && state) {
+      const pickKey = `${state.current_round}.${state.current_pick_in_round}`;
+      if (lastAlertedPickRef.current !== pickKey) {
+        lastAlertedPickRef.current = pickKey;
+
+        if (!isAdmin) {
+          window.alert(`It is now your turn to pick.\n\nRound ${state.current_round} • Pick ${state.current_pick_in_round}`);
+        }
+      }
+    }
+
+    prevIsMyTurnRef.current = nowMyTurn;
+  }, [isMyTurn, state, isAdmin]);
 
   const topBar = useMemo(() => {
     if (!state) return `Room ${room} • Draft not started yet`;
@@ -544,7 +580,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       console.error("draft draft_pick RPC error:", error);
       alert("Draft failed: " + (error?.message ?? "Unknown error"));
       setBusy(false);
-      await Promise.all([loadState(), loadPlayers(), loadDraftOrder(), loadCoaches()]);
+      await refreshAll();
       return;
     }
 
@@ -561,11 +597,11 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       }
 
       setBusy(false);
-      await Promise.all([loadState(), loadPlayers(), loadDraftOrder(), loadCoaches()]);
+      await refreshAll();
       return;
     }
 
-    await Promise.all([loadState(), loadPlayers(), loadDraftOrder(), loadCoaches()]);
+    await refreshAll();
     setConfirm({ open: false, player: null });
     setBusy(false);
   }
