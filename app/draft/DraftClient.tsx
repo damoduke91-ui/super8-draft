@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabase";
 
@@ -38,8 +38,29 @@ type DraftOrderRow = {
   coach_id: number;
 };
 
-const POS_TABS = ["ALL", "KD", "DEF", "MID", "FOR", "KF", "RUC"] as const;
+type ConfirmState = {
+  open: boolean;
+  player: Player | null;
+};
+
+type DraftClientProps = {
+  mode?: "admin" | "coach";
+};
+
 type PosTab = (typeof POS_TABS)[number];
+type SortKey = "player_no" | "player_name" | "club" | "average" | "custom";
+type SlotBucket = "KD" | "DEF" | "MID" | "FOR" | "KF" | "RUC" | "MISC";
+
+type DraftSheetRow = {
+  slotNo: number;
+  slotLabel: SlotBucket;
+  displayPosition: string;
+  assigned: Player | null;
+};
+
+const MAX_ROUNDS = 46;
+
+const POS_TABS = ["ALL", "KD", "DEF", "MID", "FOR", "KF", "RUC"] as const;
 
 const POS_LABEL: Record<PosTab, string> = {
   ALL: "All",
@@ -50,6 +71,16 @@ const POS_LABEL: Record<PosTab, string> = {
   KF: "KF",
   RUC: "RUC",
 };
+
+const SLOT_DEFS: Array<{ from: number; to: number; label: SlotBucket }> = [
+  { from: 1, to: 4, label: "KD" },
+  { from: 5, to: 11, label: "DEF" },
+  { from: 12, to: 19, label: "MID" },
+  { from: 20, to: 26, label: "FOR" },
+  { from: 27, to: 30, label: "KF" },
+  { from: 31, to: 33, label: "RUC" },
+  { from: 34, to: 46, label: "MISC" },
+];
 
 function hexToRgb(hex: string) {
   const h = hex.replace("#", "").trim();
@@ -132,14 +163,47 @@ function formatSbError(err: any): string {
   }
 }
 
-type ConfirmState = {
-  open: boolean;
-  player: Player | null;
-};
+function capRounds(rounds: number | null | undefined) {
+  if (!rounds || Number.isNaN(rounds)) return MAX_ROUNDS;
+  return Math.min(rounds, MAX_ROUNDS);
+}
 
-type DraftClientProps = {
-  mode?: "admin" | "coach";
-};
+function getSlotLabel(slotNo: number): SlotBucket {
+  for (const def of SLOT_DEFS) {
+    if (slotNo >= def.from && slotNo <= def.to) return def.label;
+  }
+  return "MISC";
+}
+
+function getBucketForPlayer(player: Player): SlotBucket {
+  const tags = splitPos(player.pos);
+
+  if (tags.includes("KD")) return "KD";
+  if (tags.includes("KF")) return "KF";
+  if (tags.includes("DEF")) return "DEF";
+  if (tags.includes("MID")) return "MID";
+  if (tags.includes("FOR")) return "FOR";
+  if (tags.includes("RUC")) return "RUC";
+
+  return "MISC";
+}
+
+function buildDefaultCustomOrder(players: Player[]) {
+  return players
+    .slice()
+    .sort((a, b) => a.player_no - b.player_no)
+    .map((p) => p.player_no);
+}
+
+function mergeCustomOrder(savedOrder: number[], players: Player[]) {
+  const validPlayerNos = new Set(players.map((p) => p.player_no));
+  const kept = savedOrder.filter((playerNo) => validPlayerNos.has(playerNo));
+  const missing = players
+    .map((p) => p.player_no)
+    .filter((playerNo) => !kept.includes(playerNo))
+    .sort((a, b) => a - b);
+  return [...kept, ...missing];
+}
 
 export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const pathname = usePathname();
@@ -163,7 +227,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const [draftOrderError, setDraftOrderError] = useState<string | null>(null);
 
   const [posTab, setPosTab] = useState<PosTab>("ALL");
-  const [sortKey, setSortKey] = useState<"player_no" | "player_name" | "club" | "average">("player_no");
+  const [sortKey, setSortKey] = useState<SortKey>("player_no");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState("");
   const [hideDrafted, setHideDrafted] = useState(true);
@@ -172,12 +236,17 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const [dontAskAgain, setDontAskAgain] = useState(false);
   const [skipConfirm, setSkipConfirm] = useState(false);
 
+  const [customOrder, setCustomOrder] = useState<number[]>([]);
+
   const skipKey = useMemo(() => `super8_skip_confirm:${room}:${coachId}`, [room, coachId]);
+  const customOrderKey = useMemo(() => `super8_custom_order:${room}:${coachId}`, [room, coachId]);
 
   const pollTimerRef = useRef<number | null>(null);
   const timersRef = useRef<Record<string, any>>({});
   const prevIsMyTurnRef = useRef(false);
   const lastAlertedPickRef = useRef<string>("");
+
+  const canUseCustomSort = !isAdmin && coachId === 3;
 
   useEffect(() => {
     try {
@@ -187,6 +256,39 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       setSkipConfirm(false);
     }
   }, [skipKey]);
+
+  useEffect(() => {
+    if (!canUseCustomSort) {
+      setCustomOrder([]);
+      if (sortKey === "custom") setSortKey("player_no");
+      return;
+    }
+
+    try {
+      const raw = localStorage.getItem(customOrderKey);
+      const saved = raw ? (JSON.parse(raw) as number[]) : [];
+      const merged = mergeCustomOrder(saved, players);
+      const fallback = buildDefaultCustomOrder(players);
+      const next = merged.length > 0 ? merged : fallback;
+      setCustomOrder(next);
+
+      if (!raw && next.length > 0) {
+        localStorage.setItem(customOrderKey, JSON.stringify(next));
+      }
+    } catch {
+      const fallback = buildDefaultCustomOrder(players);
+      setCustomOrder(fallback);
+    }
+  }, [customOrderKey, players, canUseCustomSort, sortKey]);
+
+  function saveCustomOrder(nextOrder: number[]) {
+    setCustomOrder(nextOrder);
+    try {
+      localStorage.setItem(customOrderKey, JSON.stringify(nextOrder));
+    } catch {
+      // ignore
+    }
+  }
 
   function schedule(key: "state" | "players" | "coaches" | "order", fn: () => void, ms = 150) {
     if (timersRef.current[key]) clearTimeout(timersRef.current[key]);
@@ -205,7 +307,12 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       return null;
     }
 
-    return (data as DraftState) || null;
+    if (!data) return null;
+
+    return {
+      ...(data as DraftState),
+      rounds_total: capRounds((data as DraftState).rounds_total),
+    };
   }
 
   async function loadState() {
@@ -224,7 +331,16 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       return;
     }
 
-    setState((data as DraftState) || null);
+    if (!data) {
+      setState(null);
+      return;
+    }
+
+    setState({
+      ...(data as DraftState),
+      rounds_total: capRounds((data as DraftState).rounds_total),
+      current_round: Math.min((data as DraftState).current_round, MAX_ROUNDS + 1),
+    });
   }
 
   async function loadPlayers() {
@@ -374,23 +490,26 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   }
 
   const roundsTotal = useMemo(() => {
-    if (state?.rounds_total) return state.rounds_total;
-    if (!draftOrder.length || !nCoaches) return 0;
+    if (state?.rounds_total) return capRounds(state.rounds_total);
+    if (!draftOrder.length || !nCoaches) return MAX_ROUNDS;
     const maxPick = draftOrder[draftOrder.length - 1]?.overall_pick ?? 0;
-    return Math.ceil(maxPick / nCoaches);
+    return capRounds(Math.ceil(maxPick / nCoaches));
   }, [state, draftOrder, nCoaches]);
 
   const draftOrderByPick = useMemo(() => {
     const m = new Map<number, number>();
-    for (const row of draftOrder) m.set(row.overall_pick, row.coach_id);
+    for (const row of draftOrder) {
+      const round = nCoaches ? Math.ceil(row.overall_pick / nCoaches) : 0;
+      if (round <= MAX_ROUNDS) m.set(row.overall_pick, row.coach_id);
+    }
     return m;
-  }, [draftOrder]);
+  }, [draftOrder, nCoaches]);
 
   const draftedByOverall = useMemo(() => {
     const m = new Map<number, Player>();
     if (!nCoaches) return m;
     for (const p of players) {
-      if (p.drafted_round && p.drafted_pick) {
+      if (p.drafted_round && p.drafted_pick && p.drafted_round <= MAX_ROUNDS) {
         const ov = overallPick(p.drafted_round, p.drafted_pick);
         if (ov > 0) m.set(ov, p);
       }
@@ -398,7 +517,11 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     return m;
   }, [players, nCoaches]);
 
-  const isMyTurn = !!state && !state.is_paused && state.current_coach_id === coachId;
+  const isMyTurn =
+    !!state &&
+    !state.is_paused &&
+    state.current_round <= MAX_ROUNDS &&
+    state.current_coach_id === coachId;
 
   useEffect(() => {
     const nowMyTurn = isMyTurn;
@@ -419,10 +542,12 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   }, [isMyTurn, state, isAdmin]);
 
   const topBar = useMemo(() => {
-    if (!state) return `Room ${room} • Draft not started yet`;
+    if (!state) return `Super 8 Room • Draft not started yet`;
     const live = state.is_paused ? "PAUSED" : "LIVE";
-    return `Room ${room} • Round ${state.current_round}/${state.rounds_total} • Pick ${state.current_pick_in_round} • ${live}`;
-  }, [state, room]);
+    const shownRound = Math.min(state.current_round, MAX_ROUNDS);
+    const shownRoundsTotal = capRounds(state.rounds_total);
+    return `Super 8 Room • Round ${shownRound}/${shownRoundsTotal} • Pick ${state.current_pick_in_round} • ${live}`;
+  }, [state]);
 
   const tabIdx = useMemo(() => POS_TABS.indexOf(posTab), [posTab]);
 
@@ -435,6 +560,41 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     const i = tabIdx >= POS_TABS.length - 1 ? 0 : tabIdx + 1;
     setPosTab(POS_TABS[i]);
   }
+
+  function moveCustomPlayer(playerNo: number, direction: "up" | "down") {
+    if (!canUseCustomSort) return;
+    const next = customOrder.slice();
+    const idx = next.indexOf(playerNo);
+    if (idx === -1) return;
+
+    const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= next.length) return;
+
+    [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+    saveCustomOrder(next);
+    if (sortKey !== "custom") setSortKey("custom");
+  }
+
+  function moveCustomPlayerToTop(playerNo: number) {
+    if (!canUseCustomSort) return;
+    const next = customOrder.filter((n) => n !== playerNo);
+    next.unshift(playerNo);
+    saveCustomOrder(next);
+    if (sortKey !== "custom") setSortKey("custom");
+  }
+
+  function resetCustomOrder() {
+    const next = buildDefaultCustomOrder(players);
+    saveCustomOrder(next);
+    setSortKey("custom");
+    setSortDir("asc");
+  }
+
+  const customRankByPlayerNo = useMemo(() => {
+    const m = new Map<number, number>();
+    customOrder.forEach((playerNo, idx) => m.set(playerNo, idx));
+    return m;
+  }, [customOrder]);
 
   const baseList = useMemo(() => {
     return hideDrafted ? players.filter((p) => p.drafted_by_coach_id == null) : players;
@@ -456,6 +616,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
 
     list = list.slice().sort((a, b) => {
       const dir = sortDir === "asc" ? 1 : -1;
+
+      if (sortKey === "custom") {
+        const aRank = customRankByPlayerNo.get(a.player_no) ?? Number.MAX_SAFE_INTEGER;
+        const bRank = customRankByPlayerNo.get(b.player_no) ?? Number.MAX_SAFE_INTEGER;
+        if (aRank !== bRank) return (aRank - bRank) * dir;
+        return (a.player_no - b.player_no) * dir;
+      }
+
       if (sortKey === "player_no") return (a.player_no - b.player_no) * dir;
       if (sortKey === "average") return (a.average - b.average) * dir;
       if (sortKey === "club") return a.club.localeCompare(b.club) * dir;
@@ -463,23 +631,62 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     });
 
     return list;
-  }, [baseList, posTab, search, sortKey, sortDir]);
+  }, [baseList, posTab, search, sortKey, sortDir, customRankByPlayerNo]);
 
   const myPicks = useMemo(() => {
     return players
-      .filter((p) => p.drafted_by_coach_id === coachId && p.drafted_round && p.drafted_pick)
+      .filter(
+        (p) =>
+          p.drafted_by_coach_id === coachId &&
+          p.drafted_round &&
+          p.drafted_pick &&
+          p.drafted_round <= MAX_ROUNDS
+      )
       .slice()
       .sort((a, b) => (a.drafted_round! - b.drafted_round!) || (a.drafted_pick! - b.drafted_pick!));
   }, [players, coachId]);
 
   const myDraftSheet = useMemo(() => {
-    const rt = state?.rounds_total ?? 46;
-    const slots = Array.from({ length: rt }, (_, i) => i + 1);
-    return slots.map((slotNo) => {
-      const assigned = myPicks[slotNo - 1] || null;
-      return { slotNo, displayPosition: assigned ? assigned.pos : "", assigned };
+    const rows: DraftSheetRow[] = Array.from({ length: MAX_ROUNDS }, (_, i) => {
+      const slotNo = i + 1;
+      const slotLabel = getSlotLabel(slotNo);
+      return {
+        slotNo,
+        slotLabel,
+        displayPosition: slotLabel === "MISC" ? "" : slotLabel,
+        assigned: null,
+      };
     });
-  }, [myPicks, state]);
+
+    const openSlotNosByBucket: Record<SlotBucket, number[]> = {
+      KD: [],
+      DEF: [],
+      MID: [],
+      FOR: [],
+      KF: [],
+      RUC: [],
+      MISC: [],
+    };
+
+    rows.forEach((row) => {
+      openSlotNosByBucket[row.slotLabel].push(row.slotNo);
+    });
+
+    for (const p of myPicks) {
+      const preferredBucket = getBucketForPlayer(p);
+
+      const targetSlotNo =
+        openSlotNosByBucket[preferredBucket].shift() ?? openSlotNosByBucket.MISC.shift();
+
+      if (!targetSlotNo) continue;
+
+      const row = rows[targetSlotNo - 1];
+      row.assigned = p;
+      row.displayPosition = row.slotLabel === "MISC" ? p.pos : row.slotLabel;
+    }
+
+    return rows;
+  }, [myPicks]);
 
   const analytics = useMemo(() => {
     const total = players.length;
@@ -495,7 +702,13 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     };
   }, [players, myPicks]);
 
-  const toggleSort = (key: typeof sortKey) => {
+  const toggleSort = (key: SortKey) => {
+    if (key === "custom") {
+      setSortKey("custom");
+      setSortDir("asc");
+      return;
+    }
+
     if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else {
       setSortKey(key);
@@ -506,9 +719,10 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const miniBoard = useMemo(() => {
     if (!nCoaches || !roundsTotal) return null;
 
-    const curRound = state?.current_round ?? 1;
+    const curRoundRaw = state?.current_round ?? 1;
+    const curRound = Math.min(curRoundRaw, MAX_ROUNDS);
     const r1 = curRound;
-    const r2 = Math.min(curRound + 1, roundsTotal);
+    const r2 = Math.min(curRound + 1, roundsTotal, MAX_ROUNDS);
 
     const roundsToShow = r1 === r2 ? [r1] : [r1, r2];
 
@@ -550,6 +764,11 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     }
 
     setState(freshState);
+
+    if (freshState.current_round > MAX_ROUNDS) {
+      alert("The draft is complete. No picks are available after round 46.");
+      return;
+    }
 
     if (freshState.is_paused) {
       alert(pauseReasonLabel(freshState.pause_reason) ?? "Draft is paused.");
@@ -613,6 +832,10 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       alert("Draft not started yet (no draft_state row).");
       return;
     }
+    if (state.current_round > MAX_ROUNDS) {
+      alert("The draft is complete. No picks are available after round 46.");
+      return;
+    }
     if (state.is_paused) {
       alert(pauseReasonLabel(state.pause_reason) ?? "Draft is paused.");
       return;
@@ -664,7 +887,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const textMain = "#101828";
   const textSoft = "#475467";
 
-  const chipStyle: React.CSSProperties = {
+  const chipStyle: CSSProperties = {
     display: "flex",
     justifyContent: "space-between",
     gap: 10,
@@ -677,7 +900,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     color: textMain,
   };
 
-  const card: React.CSSProperties = {
+  const card: CSSProperties = {
     border: `1px solid ${panelBorder}`,
     borderRadius: 16,
     padding: 14,
@@ -685,7 +908,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     boxShadow: "0 10px 30px rgba(16,24,40,0.06)",
   };
 
-  const subtle: React.CSSProperties = { fontSize: 12, color: textSoft };
+  const subtle: CSSProperties = { fontSize: 12, color: textSoft };
 
   const anyError = stateError || playersError || coachesError || draftOrderError;
 
@@ -707,7 +930,9 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   fontSize: 15,
                 }}
               >
-                {state?.is_paused
+                {state?.current_round && state.current_round > MAX_ROUNDS
+                  ? "Draft complete"
+                  : state?.is_paused
                   ? pauseReasonLabel(state.pause_reason) ?? "Waiting (Admin hasn’t started the draft yet)…"
                   : isMyTurn
                   ? "You are ON THE CLOCK"
@@ -715,7 +940,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
               </div>
 
               <div style={{ marginTop: 8, fontSize: 13, color: textSoft }}>
-                Room: <strong style={{ color: textMain }}>{room}</strong> • Coach:{" "}
+                Room: <strong style={{ color: textMain }}>Super 8 Room</strong> • Coach:{" "}
                 <strong style={{ color: textMain }}>{coachName}</strong>
                 {isAdmin ? <span style={{ marginLeft: 8 }}>• Admin view</span> : null}
               </div>
@@ -754,7 +979,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
             </div>
           </div>
 
-          {state && !state.is_paused && isMyTurn ? (
+          {state && !state.is_paused && isMyTurn && state.current_round <= MAX_ROUNDS ? (
             <div
               style={{
                 marginTop: 14,
@@ -1060,6 +1285,25 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 >
                   {hideDrafted ? "Available only" : "Show drafted"}
                 </button>
+
+                {canUseCustomSort ? (
+                  <button
+                    type="button"
+                    onClick={resetCustomOrder}
+                    style={{
+                      padding: "11px 13px",
+                      borderRadius: 12,
+                      border: "1px solid #475467",
+                      background: "#111827",
+                      color: availableText,
+                      fontWeight: 900,
+                      cursor: "pointer",
+                    }}
+                    title="Reset custom order back to player number order"
+                  >
+                    Reset Custom
+                  </button>
+                ) : null}
               </div>
 
               <div
@@ -1086,7 +1330,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     <button
                       key={key}
                       type="button"
-                      onClick={() => toggleSort(key as typeof sortKey)}
+                      onClick={() => toggleSort(key as SortKey)}
                       style={{
                         padding: "6px 10px",
                         borderRadius: 999,
@@ -1102,14 +1346,51 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   );
                 })}
 
+                {canUseCustomSort ? (
+                  <button
+                    type="button"
+                    onClick={() => toggleSort("custom")}
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      border: sortKey === "custom" ? "1px solid #ffffff" : "1px solid #475467",
+                      background: sortKey === "custom" ? "#f9fafb" : "#111827",
+                      color: sortKey === "custom" ? "#101828" : "#ffffff",
+                      fontWeight: 900,
+                      cursor: "pointer",
+                    }}
+                    title="Coach 3 custom order"
+                  >
+                    Custom
+                  </button>
+                ) : null}
+
                 <span style={{ opacity: 0.85 }}>
                   ({sortKey} {sortDir}) • showing <strong>{filtered.length}</strong>
                 </span>
               </div>
 
+              {canUseCustomSort && sortKey === "custom" ? (
+                <div
+                  style={{
+                    marginBottom: 10,
+                    padding: "10px 12px",
+                    borderRadius: 12,
+                    background: "#111827",
+                    border: "1px solid #475467",
+                    color: "#e5e7eb",
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Coach 3 custom order is saved on this device. Use <strong>Top</strong>, <strong>↑</strong>, and{" "}
+                  <strong>↓</strong> to pre-rank players.
+                </div>
+              ) : null}
+
               <div style={{ maxHeight: 560, overflowY: "auto", borderTop: "1px solid rgba(255,255,255,0.14)" }}>
                 {filtered.map((p) => {
-                  const disabled = !isMyTurn || busy || p.drafted_by_coach_id != null || !!state?.is_paused;
+                  const disabled = !isMyTurn || busy || p.drafted_by_coach_id != null || !!state?.is_paused || (state?.current_round ?? 1) > MAX_ROUNDS;
 
                   return (
                     <div
@@ -1138,7 +1419,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                       }}
                       title={disabled ? "Draft disabled (not your turn / paused / busy / already drafted)" : "Click to draft"}
                     >
-                      <div style={{ color: availableText }}>
+                      <div style={{ color: availableText, minWidth: 0, flex: 1 }}>
                         <div style={{ fontSize: 15 }}>
                           <strong style={{ color: availableText }}>{p.player_no}</strong> — {p.player_name}
                         </div>
@@ -1147,26 +1428,89 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                         </div>
                       </div>
 
-                      <button
-                        disabled={disabled}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (!disabled) requestDraft(p);
-                        }}
-                        style={{
-                          padding: "9px 13px",
-                          borderRadius: 10,
-                          border: "1px solid #d0d5dd",
-                          cursor: disabled ? "not-allowed" : "pointer",
-                          background: disabled ? "#98a2b3" : "#ffffff",
-                          color: disabled ? "#344054" : "#111111",
-                          fontWeight: 900,
-                          whiteSpace: "nowrap",
-                        }}
-                        type="button"
-                      >
-                        Draft
-                      </button>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        {canUseCustomSort && sortKey === "custom" ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                moveCustomPlayerToTop(p.player_no);
+                              }}
+                              style={{
+                                padding: "8px 10px",
+                                borderRadius: 10,
+                                border: "1px solid #d0d5dd",
+                                background: "#ffffff",
+                                color: "#111111",
+                                fontWeight: 900,
+                                cursor: "pointer",
+                              }}
+                            >
+                              Top
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                moveCustomPlayer(p.player_no, "up");
+                              }}
+                              style={{
+                                padding: "8px 10px",
+                                borderRadius: 10,
+                                border: "1px solid #d0d5dd",
+                                background: "#ffffff",
+                                color: "#111111",
+                                fontWeight: 900,
+                                cursor: "pointer",
+                              }}
+                            >
+                              ↑
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                moveCustomPlayer(p.player_no, "down");
+                              }}
+                              style={{
+                                padding: "8px 10px",
+                                borderRadius: 10,
+                                border: "1px solid #d0d5dd",
+                                background: "#ffffff",
+                                color: "#111111",
+                                fontWeight: 900,
+                                cursor: "pointer",
+                              }}
+                            >
+                              ↓
+                            </button>
+                          </>
+                        ) : null}
+
+                        <button
+                          disabled={disabled}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!disabled) requestDraft(p);
+                          }}
+                          style={{
+                            padding: "9px 13px",
+                            borderRadius: 10,
+                            border: "1px solid #d0d5dd",
+                            cursor: disabled ? "not-allowed" : "pointer",
+                            background: disabled ? "#98a2b3" : "#ffffff",
+                            color: disabled ? "#344054" : "#111111",
+                            fontWeight: 900,
+                            whiteSpace: "nowrap",
+                          }}
+                          type="button"
+                        >
+                          Draft
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -1278,9 +1622,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   </table>
                 </div>
 
-                <div style={{ marginTop: 10, fontSize: 12, color: textSoft }}>
-                  Slots shown = {state?.rounds_total ?? 46}
-                </div>
+                <div style={{ marginTop: 10, fontSize: 12, color: textSoft }}>Slots shown = 46</div>
               </div>
             </div>
           </div>
