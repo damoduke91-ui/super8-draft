@@ -71,7 +71,7 @@ function luminanceFromHex(hex: string) {
 
 function bestTextColor(bgHex: string) {
   const L = luminanceFromHex(bgHex);
-  return L > 0.5 ? "#111" : "#fff";
+  return L > 0.5 ? "#111111" : "#ffffff";
 }
 
 function pauseReasonLabel(pause_reason: string | null) {
@@ -147,7 +147,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const isAdmin = mode === "admin" || isAdminRoute;
 
   const sp = useSearchParams();
-  const room = sp.get("room") || "DUMMY1";
+  const room = (sp.get("room") || "DUMMY1").trim().toUpperCase();
   const coachId = Number(sp.get("coach") || "0");
 
   const [state, setState] = useState<DraftState | null>(null);
@@ -190,9 +190,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     timersRef.current[key] = setTimeout(fn, ms);
   }
 
-  async function loadState() {
-    setStateError(null);
-
+  async function fetchLatestState() {
     const { data, error } = await supabase
       .from("draft_state")
       .select("room_id,is_paused,pause_reason,rounds_total,current_round,current_pick_in_round,current_coach_id")
@@ -200,13 +198,24 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       .maybeSingle();
 
     if (error) {
-      console.error("draft loadState error:", error);
-      setStateError(formatSbError(error));
+      console.error("draft fetchLatestState error:", error);
+      return null;
+    }
+
+    return (data as DraftState) || null;
+  }
+
+  async function loadState() {
+    setStateError(null);
+
+    const data = await fetchLatestState();
+
+    if (!data) {
       setState(null);
       return;
     }
 
-    setState((data as DraftState) || null);
+    setState(data);
   }
 
   async function loadPlayers() {
@@ -368,7 +377,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const isMyTurn = !!state && !state.is_paused && state.current_coach_id === coachId;
 
   const topBar = useMemo(() => {
-    if (!state) return `Room ${room} • (No draft_state row yet OR not started)`;
+    if (!state) return `Room ${room} • Draft not started yet`;
     const live = state.is_paused ? "PAUSED" : "LIVE";
     return `Room ${room} • Round ${state.current_round}/${state.rounds_total} • Pick ${state.current_pick_in_round} • ${live}`;
   }, [state, room]);
@@ -489,20 +498,32 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   }, [nCoaches, roundsTotal, state, draftOrderByPick, coachNameById, draftedByOverall]);
 
   async function doDraft(p: Player) {
-    if (!state) {
+    if (busy) return;
+
+    const freshState = await fetchLatestState();
+
+    if (!freshState) {
       alert("Draft not started yet (no draft_state row).");
       return;
     }
-    if (state.is_paused) {
-      alert(pauseReasonLabel(state.pause_reason) ?? "Draft is paused.");
+
+    setState(freshState);
+
+    if (freshState.is_paused) {
+      alert(pauseReasonLabel(freshState.pause_reason) ?? "Draft is paused.");
       return;
     }
-    if (!isMyTurn) {
-      alert("Not your turn.");
+
+    if (freshState.current_coach_id !== coachId) {
+      const liveCoachName = coachNameById.get(freshState.current_coach_id) ?? `Coach ${freshState.current_coach_id}`;
+      alert(`Not your turn. It is currently ${liveCoachName}'s pick.`);
       return;
     }
-    if (busy) return;
-    if (p.drafted_by_coach_id != null) return;
+
+    if (p.drafted_by_coach_id != null) {
+      alert("That player has already been drafted.");
+      return;
+    }
 
     setBusy(true);
 
@@ -517,13 +538,25 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       console.error("draft draft_pick RPC error:", error);
       alert("Draft failed: " + (error?.message ?? "Unknown error"));
       setBusy(false);
+      await loadState();
+      await loadPlayers();
       return;
     }
 
     const res = Array.isArray(data) ? data[0] : data;
     if (!res?.ok) {
-      alert("Draft failed: " + (res?.message ?? "Unknown error"));
+      const freshAfter = await fetchLatestState();
+      if (freshAfter) setState(freshAfter);
+
+      if (freshAfter && freshAfter.current_coach_id !== coachId) {
+        const liveCoachName = coachNameById.get(freshAfter.current_coach_id) ?? `Coach ${freshAfter.current_coach_id}`;
+        alert(`Draft failed: it is now ${liveCoachName}'s pick.`);
+      } else {
+        alert("Draft failed: " + (res?.message ?? "Unknown error"));
+      }
+
       setBusy(false);
+      await loadPlayers();
       return;
     }
 
@@ -542,7 +575,10 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       return;
     }
     if (!isMyTurn) {
-      alert("Not your turn.");
+      const liveCoachName = state.current_coach_id
+        ? coachNameById.get(state.current_coach_id) ?? `Coach ${state.current_coach_id}`
+        : "another coach";
+      alert(`Not your turn. It is currently ${liveCoachName}'s pick.`);
       return;
     }
     if (busy) return;
@@ -578,461 +614,239 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     await doDraft(p);
   }
 
-  const availablePanelBg = "#2f2f2f";
+  const availablePanelBg = "#1f2937";
   const availableText = bestTextColor(availablePanelBg);
+
+  const pageBg = "#eef2f7";
+  const panelBorder = "#d0d5dd";
+  const textMain = "#101828";
+  const textSoft = "#475467";
 
   const chipStyle: React.CSSProperties = {
     display: "flex",
     justifyContent: "space-between",
     gap: 10,
     padding: "10px 12px",
-    border: "1px solid #eee",
+    border: "1px solid #e4e7ec",
     borderRadius: 12,
-    background: "#fafafa",
+    background: "#f8fafc",
     fontWeight: 800,
     fontSize: 13,
+    color: textMain,
   };
 
   const card: React.CSSProperties = {
-    border: "1px solid #ddd",
-    borderRadius: 12,
-    padding: 12,
-    background: "#fff",
+    border: `1px solid ${panelBorder}`,
+    borderRadius: 16,
+    padding: 14,
+    background: "#ffffff",
+    boxShadow: "0 10px 30px rgba(16,24,40,0.06)",
   };
 
-  const subtle: React.CSSProperties = { fontSize: 12, opacity: 0.75 };
+  const subtle: React.CSSProperties = { fontSize: 12, color: textSoft };
 
   const anyError = stateError || playersError || coachesError || draftOrderError;
 
+  const coachName = coachId ? coachNameById.get(coachId) ?? `Coach ${coachId}` : "No coach selected";
+
   return (
-    <div style={{ padding: 16 }}>
-      <div style={{ padding: 12, border: "1px solid #ddd", marginBottom: 12, borderRadius: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-          <div>
-            <strong>{topBar}</strong>
-            <div style={{ marginTop: 6, color: isMyTurn ? "green" : "#555", fontWeight: 800 }}>
-              {state?.is_paused
-                ? pauseReasonLabel(state.pause_reason) ?? "Waiting (Admin hasn’t started the draft yet)…"
-                : isMyTurn
-                ? "You are ON THE CLOCK"
-                : "Waiting for your turn…"}
+    <div style={{ minHeight: "100vh", background: pageBg, padding: 16 }}>
+      <div style={{ maxWidth: 1440, margin: "0 auto" }}>
+        <div style={{ ...card, marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div>
+              <strong style={{ color: textMain, fontSize: 18 }}>{topBar}</strong>
+
+              <div
+                style={{
+                  marginTop: 8,
+                  color: state?.is_paused ? "#b54708" : isMyTurn ? "#027a48" : textSoft,
+                  fontWeight: 900,
+                  fontSize: 15,
+                }}
+              >
+                {state?.is_paused
+                  ? pauseReasonLabel(state.pause_reason) ?? "Waiting (Admin hasn’t started the draft yet)…"
+                  : isMyTurn
+                  ? "You are ON THE CLOCK"
+                  : "Waiting for your turn…"}
+              </div>
+
+              <div style={{ marginTop: 8, fontSize: 13, color: textSoft }}>
+                Room: <strong style={{ color: textMain }}>{room}</strong> • Coach:{" "}
+                <strong style={{ color: textMain }}>{coachName}</strong>
+                {isAdmin ? <span style={{ marginLeft: 8 }}>• Admin view</span> : null}
+              </div>
             </div>
-            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
-              Room: <strong>{room}</strong> • Coach: <strong>{coachId}</strong>
-              {isAdmin ? <span style={{ marginLeft: 8, opacity: 0.8 }}>• Admin view</span> : null}
+
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <a
+                href={`/board?room=${encodeURIComponent(room)}`}
+                style={{
+                  padding: "11px 14px",
+                  borderRadius: 12,
+                  border: "1px solid #111111",
+                  background: "#ffffff",
+                  fontWeight: 900,
+                  textDecoration: "none",
+                  color: "#111111",
+                }}
+              >
+                Open Board
+              </a>
+
+              <a
+                href={`/admin?room=${encodeURIComponent(room)}`}
+                style={{
+                  padding: "11px 14px",
+                  borderRadius: 12,
+                  border: "1px solid #111111",
+                  background: "#111111",
+                  fontWeight: 900,
+                  textDecoration: "none",
+                  color: "#ffffff",
+                }}
+              >
+                Admin
+              </a>
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <a
-              href={`/board?room=${encodeURIComponent(room)}`}
+          {state && !state.is_paused && isMyTurn ? (
+            <div
               style={{
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "1px solid #222",
-                background: "#fff",
-                fontWeight: 900,
-                textDecoration: "none",
-                color: "#111",
+                marginTop: 14,
+                padding: "16px 18px",
+                borderRadius: 16,
+                border: "2px solid #111111",
+                background: "linear-gradient(90deg, #ffe08a, #fff6d6)",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+                flexWrap: "wrap",
               }}
             >
-              Open Board →
-            </a>
+              <div style={{ fontSize: 24, fontWeight: 1000, letterSpacing: 0.3, color: "#111111" }}>
+                ⏱️ ON THE CLOCK
+              </div>
+              <div style={{ fontWeight: 900, color: "#111111" }}>
+                Pick:{" "}
+                <span style={{ fontFamily: "monospace" }}>
+                  {state.current_round}.{state.current_pick_in_round}
+                </span>
+              </div>
+            </div>
+          ) : null}
 
-            <a
-              href={`/admin?room=${encodeURIComponent(room)}`}
+          {anyError ? (
+            <div
               style={{
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "1px solid #222",
-                background: "#111",
-                fontWeight: 900,
-                textDecoration: "none",
-                color: "#fff",
+                marginTop: 12,
+                padding: 12,
+                borderRadius: 14,
+                border: "1px solid #fecdca",
+                background: "#fef3f2",
+                color: "#b42318",
+                fontWeight: 800,
+                fontSize: 13,
+                whiteSpace: "pre-wrap",
               }}
             >
-              Admin →
-            </a>
-          </div>
+              There are loading errors. Check the browser console for the exact details.
+            </div>
+          ) : null}
         </div>
 
-        {state && !state.is_paused && isMyTurn ? (
-          <div
-            style={{
-              marginTop: 12,
-              padding: "14px 16px",
-              borderRadius: 14,
-              border: "2px solid #111",
-              background: "linear-gradient(90deg, #ffe08a, #fff6d6)",
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: 12,
-              flexWrap: "wrap",
-            }}
-          >
-            <div style={{ fontSize: 22, fontWeight: 1000, letterSpacing: 0.4 }}>⏱️ ON THE CLOCK</div>
-            <div style={{ fontWeight: 900 }}>
-              Pick:{" "}
-              <span style={{ fontFamily: "monospace" }}>
-                {state.current_round}.{state.current_pick_in_round}
-              </span>
+        <div style={{ marginBottom: 12 }}>
+          <div style={card}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ fontWeight: 1000, color: textMain, fontSize: 18 }}>Mini Draft Board</div>
+              <div style={subtle}>
+                Showing: <strong style={{ color: textMain }}>current</strong> +{" "}
+                <strong style={{ color: textMain }}>next</strong> round
+              </div>
             </div>
-          </div>
-        ) : null}
 
-        {anyError ? (
-          <div
-            style={{
-              marginTop: 10,
-              padding: 10,
-              borderRadius: 12,
-              border: "1px solid #f2c2c2",
-              background: "#fff5f5",
-              color: "#7a1d1d",
-              fontWeight: 800,
-              fontSize: 13,
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            There are loading errors. (Check console for details.)
-          </div>
-        ) : null}
-      </div>
-
-      <div style={{ marginBottom: 12 }}>
-        <div style={card}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ fontWeight: 1000 }}>Mini Draft Board</div>
-            <div style={subtle}>
-              Showing: <strong>current</strong> + <strong>next</strong> round
-            </div>
-          </div>
-
-          {!miniBoard ? (
-            <div style={{ marginTop: 10, opacity: 0.8 }}>
-              Waiting for draft data… (need coaches + draft_order + rounds_total)
-            </div>
-          ) : (
-            <div style={{ marginTop: 10, overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr>
-                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Round</th>
-                    {Array.from({ length: nCoaches || 0 }, (_, i) => (
-                      <th key={i} style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>
-                        Pick {i + 1}
+            {!miniBoard ? (
+              <div style={{ marginTop: 10, color: textSoft }}>
+                Waiting for draft data… (need coaches + draft_order + rounds_total)
+              </div>
+            ) : (
+              <div style={{ marginTop: 10, overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e4e7ec", color: textMain }}>
+                        Round
                       </th>
-                    ))}
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {miniBoard.rows.map((r) => (
-                    <tr key={r.round}>
-                      <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0", fontWeight: 1000 }}>
-                        {r.round} <span style={{ opacity: 0.6 }}>{r.direction}</span>
-                      </td>
-
-                      {r.cells.map((c) => (
-                        <td
-                          key={c.overall}
-                          style={{
-                            padding: 8,
-                            borderBottom: "1px solid #f0f0f0",
-                            background: c.isCurrent ? "#fff6d6" : undefined,
-                            outline: c.isCurrent ? "2px solid #d3a200" : "1px solid transparent",
-                            verticalAlign: "top",
-                            minWidth: 160,
-                          }}
-                          title={`Overall #${c.overall} • ${c.coach_name}`}
+                      {Array.from({ length: nCoaches || 0 }, (_, i) => (
+                        <th
+                          key={i}
+                          style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e4e7ec", color: textMain }}
                         >
-                          <div style={{ fontWeight: 1000 }}>{c.coach_name}</div>
-                          <div style={{ fontSize: 12, opacity: 0.8 }}>Overall #{c.overall}</div>
-
-                          {c.drafted ? (
-                            <div style={{ marginTop: 4, fontSize: 12 }}>
-                              <strong>{c.drafted.player_name}</strong>
-                              <div style={{ opacity: 0.8 }}>
-                                #{c.drafted.player_no} • {c.drafted.pos} • {c.drafted.club}
-                              </div>
-                            </div>
-                          ) : (
-                            <div style={{ marginTop: 4, fontSize: 12, opacity: 0.45 }}>—</div>
-                          )}
-                        </td>
+                          Pick {i + 1}
+                        </th>
                       ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
+                  </thead>
 
-      {isAdmin ? (
-        <div style={{ display: "grid", gap: 12 }}>
-          <div style={{ border: "1px solid #ddd", padding: 12, borderRadius: 10, background: "#fff" }}>
-            <h2 style={{ marginTop: 0 }}>Analytics</h2>
+                  <tbody>
+                    {miniBoard.rows.map((r) => (
+                      <tr key={r.round}>
+                        <td
+                          style={{
+                            padding: 10,
+                            borderBottom: "1px solid #f2f4f7",
+                            fontWeight: 1000,
+                            color: textMain,
+                          }}
+                        >
+                          {r.round} <span style={{ color: textSoft }}>{r.direction}</span>
+                        </td>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div style={chipStyle}>
-                <span>Total</span>
-                <span>{analytics.total}</span>
+                        {r.cells.map((c) => (
+                          <td
+                            key={c.overall}
+                            style={{
+                              padding: 10,
+                              borderBottom: "1px solid #f2f4f7",
+                              background: c.isCurrent ? "#fff6d6" : undefined,
+                              outline: c.isCurrent ? "2px solid #d3a200" : "1px solid transparent",
+                              verticalAlign: "top",
+                              minWidth: 170,
+                              color: textMain,
+                            }}
+                            title={`Overall #${c.overall} • ${c.coach_name}`}
+                          >
+                            <div style={{ fontWeight: 1000 }}>{c.coach_name}</div>
+                            <div style={{ fontSize: 12, color: textSoft }}>Overall #{c.overall}</div>
+
+                            {c.drafted ? (
+                              <div style={{ marginTop: 5, fontSize: 12 }}>
+                                <strong>{c.drafted.player_name}</strong>
+                                <div style={{ color: textSoft }}>
+                                  #{c.drafted.player_no} • {c.drafted.pos} • {c.drafted.club}
+                                </div>
+                              </div>
+                            ) : (
+                              <div style={{ marginTop: 5, fontSize: 12, color: "#98a2b3" }}>—</div>
+                            )}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <div style={chipStyle}>
-                <span>Available</span>
-                <span>{analytics.available}</span>
-              </div>
-              <div style={chipStyle}>
-                <span>Drafted</span>
-                <span>{analytics.drafted}</span>
-              </div>
-              <div style={chipStyle}>
-                <span>My Picks</span>
-                <span>{analytics.myPicks}</span>
-              </div>
-            </div>
-
-            <div style={{ marginTop: 12, fontWeight: 1000, fontSize: 13, opacity: 0.8 }}>
-              Position counts (Available / Total)
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-              {(["KD", "DEF", "MID", "FOR", "KF", "RUC"] as const).map((tag) => (
-                <div key={tag} style={chipStyle}>
-                  <span>{tag}</span>
-                  <span>
-                    {analytics.posCountsAvail[tag] ?? 0} / {analytics.posCountsAll[tag] ?? 0}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
-              Note: counts use your actual <code>pos</code> tags (supports dual like MID/FOR).
-            </div>
+            )}
           </div>
         </div>
-      ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div
-            style={{
-              border: "1px solid #ddd",
-              padding: 12,
-              background: "#2f2f2f",
-              color: availableText,
-              borderRadius: 10,
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-              <h2 style={{ marginTop: 0, marginBottom: 0, color: availableText }}>Players</h2>
 
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <button
-                  type="button"
-                  onClick={prevTab}
-                  style={{
-                    padding: "8px 12px",
-                    borderRadius: 10,
-                    border: "1px solid #444",
-                    background: "#1f1f1f",
-                    color: availableText,
-                    fontWeight: 900,
-                    cursor: "pointer",
-                  }}
-                  title="Previous position tab"
-                >
-                  ←
-                </button>
-
-                <button
-                  type="button"
-                  onClick={nextTab}
-                  style={{
-                    padding: "8px 12px",
-                    borderRadius: 10,
-                    border: "1px solid #444",
-                    background: "#1f1f1f",
-                    color: availableText,
-                    fontWeight: 900,
-                    cursor: "pointer",
-                  }}
-                  title="Next position tab"
-                >
-                  →
-                </button>
-              </div>
-            </div>
-
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10, marginBottom: 10 }}>
-              {POS_TABS.map((k) => {
-                const active = posTab === k;
-                const bg = active ? "#555" : "#1f1f1f";
-                const fg = bestTextColor(bg);
-
-                return (
-                  <button
-                    key={k}
-                    style={{
-                      padding: "8px 14px",
-                      border: "none",
-                      borderRadius: 6,
-                      cursor: "pointer",
-                      fontWeight: 900,
-                      background: bg,
-                      color: fg,
-                      boxShadow: active ? "inset 0 0 0 2px #aaa" : "inset 0 0 0 1px #444",
-                    }}
-                    onClick={() => setPosTab(k)}
-                    type="button"
-                  >
-                    {POS_LABEL[k]}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search name / club / # / pos…"
-                style={{
-                  flex: 1,
-                  minWidth: 220,
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "1px solid #444",
-                  background: "#1f1f1f",
-                  color: availableText,
-                  outline: "none",
-                  fontWeight: 800,
-                }}
-              />
-
-              <button
-                type="button"
-                onClick={() => setSearch("")}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "1px solid #444",
-                  background: "#1f1f1f",
-                  color: availableText,
-                  fontWeight: 900,
-                  cursor: "pointer",
-                }}
-              >
-                Clear
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setHideDrafted((v) => !v)}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "1px solid #444",
-                  background: hideDrafted ? "#111" : "#1f1f1f",
-                  color: availableText,
-                  fontWeight: 1000,
-                  cursor: "pointer",
-                }}
-                title="Toggle drafted players visibility"
-              >
-                {hideDrafted ? "Available only" : "Show drafted"}
-              </button>
-            </div>
-
-            <div style={{ display: "flex", gap: 10, fontSize: 12, marginBottom: 10, color: availableText }}>
-              <span style={{ opacity: 0.8 }}>Sort:</span>
-              <button onClick={() => toggleSort("player_no")}>ID</button>
-              <button onClick={() => toggleSort("player_name")}>Name</button>
-              <button onClick={() => toggleSort("club")}>Club</button>
-              <button onClick={() => toggleSort("average")}>Average</button>
-              <span style={{ opacity: 0.7 }}>
-                ({sortKey} {sortDir}) • showing <strong>{filtered.length}</strong>
-              </span>
-            </div>
-
-            <div style={{ maxHeight: 520, overflowY: "auto", borderTop: "1px solid rgba(255,255,255,0.12)" }}>
-              {filtered.map((p) => {
-                const disabled = !isMyTurn || busy || p.drafted_by_coach_id != null || !!state?.is_paused;
-
-                return (
-                  <div
-                    key={p.player_no}
-                    onClick={() => {
-                      if (!disabled) requestDraft(p);
-                    }}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        if (!disabled) requestDraft(p);
-                      }
-                    }}
-                    style={{
-                      padding: 10,
-                      borderBottom: "1px solid rgba(255,255,255,0.08)",
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      gap: 10,
-                      cursor: disabled ? "not-allowed" : "pointer",
-                      opacity: disabled ? 0.7 : 1,
-                      userSelect: "none",
-                    }}
-                    title={disabled ? "Draft disabled (not your turn / paused / busy / already drafted)" : "Click to draft"}
-                  >
-                    <div style={{ color: availableText }}>
-                      <div>
-                        <strong style={{ color: availableText }}>{p.player_no}</strong> — {p.player_name}
-                      </div>
-                      <div style={{ fontSize: 12, opacity: 0.8 }}>
-                        {p.club} • {p.pos} • Avg {p.average}
-                      </div>
-                    </div>
-
-                    <button
-                      disabled={disabled}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!disabled) requestDraft(p);
-                      }}
-                      style={{
-                        padding: "8px 12px",
-                        borderRadius: 8,
-                        border: "1px solid #222",
-                        cursor: disabled ? "not-allowed" : "pointer",
-                        background: disabled ? "#999" : "#fff",
-                        color: disabled ? "#333" : "#000",
-                        fontWeight: 900,
-                        whiteSpace: "nowrap",
-                      }}
-                      type="button"
-                    >
-                      Draft
-                    </button>
-                  </div>
-                );
-              })}
-
-              {filtered.length === 0 ? (
-                <div style={{ padding: 12, opacity: 0.8, color: availableText }}>
-                  No players found for {POS_LABEL[posTab]}
-                  {search ? ` with “${search}”` : ""}.
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ border: "1px solid #ddd", padding: 12, borderRadius: 10, background: "#fff" }}>
-              <h2 style={{ marginTop: 0 }}>Analytics</h2>
+        {isAdmin ? (
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={card}>
+              <h2 style={{ marginTop: 0, color: textMain }}>Analytics</h2>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div style={chipStyle}>
@@ -1053,7 +867,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 </div>
               </div>
 
-              <div style={{ marginTop: 12, fontWeight: 1000, fontSize: 13, opacity: 0.8 }}>
+              <div style={{ marginTop: 12, fontWeight: 1000, fontSize: 13, color: textSoft }}>
                 Position counts (Available / Total)
               </div>
 
@@ -1068,150 +882,466 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 ))}
               </div>
 
-              <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
+              <div style={{ marginTop: 10, fontSize: 12, color: textSoft }}>
                 Note: counts use your actual <code>pos</code> tags (supports dual like MID/FOR).
               </div>
             </div>
-
-            <div style={{ border: "1px solid #ddd", padding: 12, borderRadius: 10 }}>
-              <h2 style={{ marginTop: 0 }}>My Draft Sheet</h2>
-
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>Slot #</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>Position</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>Player #</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>Player</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>Club</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: 8 }}>Pick #</th>
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {myDraftSheet.map((s) => (
-                      <tr key={s.slotNo}>
-                        <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>{s.slotNo}</td>
-                        <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>{s.displayPosition}</td>
-                        <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>
-                          {s.assigned ? s.assigned.player_no : ""}
-                        </td>
-                        <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>
-                          {s.assigned ? s.assigned.player_name : ""}
-                        </td>
-                        <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>
-                          {s.assigned ? s.assigned.club : ""}
-                        </td>
-                        <td style={{ borderBottom: "1px solid #f0f0f0", padding: 8 }}>
-                          {s.assigned && s.assigned.drafted_round && s.assigned.drafted_pick
-                            ? `${s.assigned.drafted_round}.${s.assigned.drafted_pick}`
-                            : ""}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-                Slots shown = {state?.rounds_total ?? 46}
-              </div>
-            </div>
           </div>
-        </div>
-      )}
-
-      {!isAdmin && confirm.open && confirm.player ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.55)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 16,
-            zIndex: 1000,
-          }}
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) closeConfirm();
-          }}
-        >
-          <div
-            style={{
-              width: "min(520px, 100%)",
-              borderRadius: 16,
-              background: "#fff",
-              border: "1px solid #e5e7eb",
-              boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
-              padding: 16,
-            }}
-          >
-            <div style={{ fontWeight: 1000, fontSize: 18 }}>Confirm Draft</div>
-
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 0.9fr)", gap: 12 }}>
             <div
               style={{
-                marginTop: 10,
-                padding: 12,
-                borderRadius: 12,
-                background: "#f9fafb",
-                border: "1px solid #e5e7eb",
+                border: `1px solid ${panelBorder}`,
+                padding: 14,
+                background: availablePanelBg,
+                color: availableText,
+                borderRadius: 16,
+                boxShadow: "0 10px 30px rgba(16,24,40,0.08)",
               }}
             >
-              <div style={{ fontWeight: 1000, fontSize: 16 }}>
-                #{confirm.player.player_no} — {confirm.player.player_name}
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <h2 style={{ marginTop: 0, marginBottom: 0, color: availableText, fontSize: 22 }}>Players</h2>
+
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={prevTab}
+                    style={{
+                      padding: "9px 13px",
+                      borderRadius: 10,
+                      border: "1px solid #475467",
+                      background: "#111827",
+                      color: availableText,
+                      fontWeight: 900,
+                      cursor: "pointer",
+                    }}
+                    title="Previous position tab"
+                  >
+                    ←
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={nextTab}
+                    style={{
+                      padding: "9px 13px",
+                      borderRadius: 10,
+                      border: "1px solid #475467",
+                      background: "#111827",
+                      color: availableText,
+                      fontWeight: 900,
+                      cursor: "pointer",
+                    }}
+                    title="Next position tab"
+                  >
+                    →
+                  </button>
+                </div>
               </div>
-              <div style={{ marginTop: 6, fontSize: 13, opacity: 0.85 }}>
-                {confirm.player.club} • {confirm.player.pos} • Avg {confirm.player.average}
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12, marginBottom: 12 }}>
+                {POS_TABS.map((k) => {
+                  const active = posTab === k;
+                  const bg = active ? "#f9fafb" : "#111827";
+                  const fg = active ? "#101828" : "#ffffff";
+
+                  return (
+                    <button
+                      key={k}
+                      style={{
+                        padding: "9px 15px",
+                        border: active ? "1px solid #f9fafb" : "1px solid #475467",
+                        borderRadius: 10,
+                        cursor: "pointer",
+                        fontWeight: 900,
+                        background: bg,
+                        color: fg,
+                        boxShadow: active ? "0 0 0 2px rgba(255,255,255,0.18)" : "none",
+                      }}
+                      onClick={() => setPosTab(k)}
+                      type="button"
+                    >
+                      {POS_LABEL[k]}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search name / club / # / pos…"
+                  style={{
+                    flex: 1,
+                    minWidth: 220,
+                    padding: "11px 13px",
+                    borderRadius: 12,
+                    border: "1px solid #475467",
+                    background: "#111827",
+                    color: availableText,
+                    outline: "none",
+                    fontWeight: 800,
+                    fontSize: 14,
+                  }}
+                />
+
+                <button
+                  type="button"
+                  onClick={() => setSearch("")}
+                  style={{
+                    padding: "11px 13px",
+                    borderRadius: 12,
+                    border: "1px solid #475467",
+                    background: "#111827",
+                    color: availableText,
+                    fontWeight: 900,
+                    cursor: "pointer",
+                  }}
+                >
+                  Clear
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setHideDrafted((v) => !v)}
+                  style={{
+                    padding: "11px 13px",
+                    borderRadius: 12,
+                    border: "1px solid #475467",
+                    background: hideDrafted ? "#f9fafb" : "#111827",
+                    color: hideDrafted ? "#101828" : availableText,
+                    fontWeight: 1000,
+                    cursor: "pointer",
+                  }}
+                  title="Toggle drafted players visibility"
+                >
+                  {hideDrafted ? "Available only" : "Show drafted"}
+                </button>
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  fontSize: 12,
+                  marginBottom: 10,
+                  color: "#e5e7eb",
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                }}
+              >
+                <span style={{ opacity: 0.9 }}>Sort:</span>
+
+                {[
+                  ["player_no", "ID"],
+                  ["player_name", "Name"],
+                  ["club", "Club"],
+                  ["average", "Average"],
+                ].map(([key, label]) => {
+                  const active = sortKey === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => toggleSort(key as typeof sortKey)}
+                      style={{
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        border: active ? "1px solid #ffffff" : "1px solid #475467",
+                        background: active ? "#f9fafb" : "#111827",
+                        color: active ? "#101828" : "#ffffff",
+                        fontWeight: 900,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+
+                <span style={{ opacity: 0.85 }}>
+                  ({sortKey} {sortDir}) • showing <strong>{filtered.length}</strong>
+                </span>
+              </div>
+
+              <div style={{ maxHeight: 560, overflowY: "auto", borderTop: "1px solid rgba(255,255,255,0.14)" }}>
+                {filtered.map((p) => {
+                  const disabled = !isMyTurn || busy || p.drafted_by_coach_id != null || !!state?.is_paused;
+
+                  return (
+                    <div
+                      key={p.player_no}
+                      onClick={() => {
+                        if (!disabled) requestDraft(p);
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          if (!disabled) requestDraft(p);
+                        }
+                      }}
+                      style={{
+                        padding: 12,
+                        borderBottom: "1px solid rgba(255,255,255,0.08)",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 10,
+                        cursor: disabled ? "not-allowed" : "pointer",
+                        opacity: disabled ? 0.78 : 1,
+                        userSelect: "none",
+                      }}
+                      title={disabled ? "Draft disabled (not your turn / paused / busy / already drafted)" : "Click to draft"}
+                    >
+                      <div style={{ color: availableText }}>
+                        <div style={{ fontSize: 15 }}>
+                          <strong style={{ color: availableText }}>{p.player_no}</strong> — {p.player_name}
+                        </div>
+                        <div style={{ fontSize: 13, color: "#d0d5dd", marginTop: 2 }}>
+                          {p.club} • {p.pos} • Avg {p.average}
+                        </div>
+                      </div>
+
+                      <button
+                        disabled={disabled}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!disabled) requestDraft(p);
+                        }}
+                        style={{
+                          padding: "9px 13px",
+                          borderRadius: 10,
+                          border: "1px solid #d0d5dd",
+                          cursor: disabled ? "not-allowed" : "pointer",
+                          background: disabled ? "#98a2b3" : "#ffffff",
+                          color: disabled ? "#344054" : "#111111",
+                          fontWeight: 900,
+                          whiteSpace: "nowrap",
+                        }}
+                        type="button"
+                      >
+                        Draft
+                      </button>
+                    </div>
+                  );
+                })}
+
+                {filtered.length === 0 ? (
+                  <div style={{ padding: 12, color: "#d0d5dd" }}>
+                    No players found for {POS_LABEL[posTab]}
+                    {search ? ` with “${search}”` : ""}.
+                  </div>
+                ) : null}
               </div>
             </div>
 
-            <label style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
-              <input type="checkbox" checked={dontAskAgain} onChange={(e) => setDontAskAgain(e.target.checked)} />
-              <span style={{ fontWeight: 900 }}>Don’t ask again on this device</span>
-            </label>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={card}>
+                <h2 style={{ marginTop: 0, color: textMain }}>Analytics</h2>
 
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 14, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                onClick={() => closeConfirm()}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "1px solid #222",
-                  background: "#fff",
-                  fontWeight: 900,
-                  cursor: "pointer",
-                }}
-              >
-                Cancel
-              </button>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div style={chipStyle}>
+                    <span>Total</span>
+                    <span>{analytics.total}</span>
+                  </div>
+                  <div style={chipStyle}>
+                    <span>Available</span>
+                    <span>{analytics.available}</span>
+                  </div>
+                  <div style={chipStyle}>
+                    <span>Drafted</span>
+                    <span>{analytics.drafted}</span>
+                  </div>
+                  <div style={chipStyle}>
+                    <span>My Picks</span>
+                    <span>{analytics.myPicks}</span>
+                  </div>
+                </div>
 
-              <button
-                type="button"
-                onClick={() => void confirmDraftNow()}
-                disabled={busy}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "1px solid #222",
-                  background: busy ? "#aaa" : "#111",
-                  color: "#fff",
-                  fontWeight: 1000,
-                  cursor: busy ? "not-allowed" : "pointer",
-                }}
-              >
-                {busy ? "Drafting..." : "Confirm Draft"}
-              </button>
+                <div style={{ marginTop: 12, fontWeight: 1000, fontSize: 13, color: textSoft }}>
+                  Position counts (Available / Total)
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                  {(["KD", "DEF", "MID", "FOR", "KF", "RUC"] as const).map((tag) => (
+                    <div key={tag} style={chipStyle}>
+                      <span>{tag}</span>
+                      <span>
+                        {analytics.posCountsAvail[tag] ?? 0} / {analytics.posCountsAll[tag] ?? 0}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ marginTop: 10, fontSize: 12, color: textSoft }}>
+                  Note: counts use your actual <code>pos</code> tags (supports dual like MID/FOR).
+                </div>
+              </div>
+
+              <div style={card}>
+                <h2 style={{ marginTop: 0, color: textMain }}>My Draft Sheet</h2>
+
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
+                          Slot #
+                        </th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
+                          Position
+                        </th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
+                          Player #
+                        </th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
+                          Player
+                        </th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
+                          Club
+                        </th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
+                          Pick #
+                        </th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {myDraftSheet.map((s) => (
+                        <tr key={s.slotNo}>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>{s.slotNo}</td>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                            {s.displayPosition}
+                          </td>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                            {s.assigned ? s.assigned.player_no : ""}
+                          </td>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                            {s.assigned ? s.assigned.player_name : ""}
+                          </td>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                            {s.assigned ? s.assigned.club : ""}
+                          </td>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                            {s.assigned && s.assigned.drafted_round && s.assigned.drafted_pick
+                              ? `${s.assigned.drafted_round}.${s.assigned.drafted_pick}`
+                              : ""}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ marginTop: 10, fontSize: 12, color: textSoft }}>
+                  Slots shown = {state?.rounds_total ?? 46}
+                </div>
+              </div>
             </div>
-
-            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.65 }}>Tip: This prevents misclick drafts.</div>
           </div>
-        </div>
-      ) : null}
+        )}
+
+        {!isAdmin && confirm.open && confirm.player ? (
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.60)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 16,
+              zIndex: 1000,
+            }}
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) closeConfirm();
+            }}
+          >
+            <div
+              style={{
+                width: "min(560px, 100%)",
+                borderRadius: 18,
+                background: "#ffffff",
+                border: "1px solid #e4e7ec",
+                boxShadow: "0 24px 70px rgba(0,0,0,0.28)",
+                padding: 18,
+              }}
+            >
+              <div style={{ fontWeight: 1000, fontSize: 22, color: textMain }}>Confirm Draft Pick</div>
+
+              <div style={{ marginTop: 6, fontSize: 14, color: textSoft, lineHeight: 1.5 }}>
+                You are about to draft the following player for <strong style={{ color: textMain }}>{coachName}</strong>.
+              </div>
+
+              <div
+                style={{
+                  marginTop: 14,
+                  padding: 14,
+                  borderRadius: 14,
+                  background: "#f8fafc",
+                  border: "1px solid #e4e7ec",
+                }}
+              >
+                <div style={{ fontWeight: 1000, fontSize: 18, color: textMain }}>
+                  #{confirm.player.player_no} — {confirm.player.player_name}
+                </div>
+                <div style={{ marginTop: 6, fontSize: 14, color: textSoft }}>
+                  {confirm.player.club} • {confirm.player.pos} • Avg {confirm.player.average}
+                </div>
+              </div>
+
+              <label style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 14 }}>
+                <input type="checkbox" checked={dontAskAgain} onChange={(e) => setDontAskAgain(e.target.checked)} />
+                <span style={{ fontWeight: 900, color: textMain }}>Don’t ask again on this device</span>
+              </label>
+
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={() => closeConfirm()}
+                  style={{
+                    padding: "11px 14px",
+                    borderRadius: 12,
+                    border: "1px solid #344054",
+                    background: "#ffffff",
+                    color: "#101828",
+                    fontWeight: 900,
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel Draft
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void confirmDraftNow()}
+                  disabled={busy}
+                  style={{
+                    padding: "11px 14px",
+                    borderRadius: 12,
+                    border: "1px solid #111111",
+                    background: busy ? "#98a2b3" : "#111111",
+                    color: "#ffffff",
+                    fontWeight: 1000,
+                    cursor: busy ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {busy ? "Drafting..." : "Confirm Draft Pick"}
+                </button>
+              </div>
+
+              <div style={{ marginTop: 12, fontSize: 12, color: textSoft }}>
+                Tip: this confirmation helps prevent accidental draft clicks.
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
