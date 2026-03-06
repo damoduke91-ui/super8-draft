@@ -216,9 +216,56 @@ function nextCoachIdFromOrder(orderRows: DraftOrderRow[], overallPick: number): 
   return found?.coach_id ?? null;
 }
 
+function compressRoundNumbersToRanges(rounds: number[]): string[] {
+  if (!rounds.length) return [];
+
+  const uniqueSorted = Array.from(new Set(rounds)).sort((a, b) => a - b);
+  const ranges: string[] = [];
+
+  let start = uniqueSorted[0];
+  let prev = uniqueSorted[0];
+
+  for (let i = 1; i < uniqueSorted.length; i++) {
+    const current = uniqueSorted[i];
+    if (current === prev + 1) {
+      prev = current;
+      continue;
+    }
+
+    ranges.push(start === prev ? `${start}` : `${start}–${prev}`);
+    start = current;
+    prev = current;
+  }
+
+  ranges.push(start === prev ? `${start}` : `${start}–${prev}`);
+  return ranges;
+}
+
+function findMissingRoundRanges(orderRows: DraftOrderRow[], rounds: number, coachCount: number): string[] {
+  const expectedOverallPicks = Array.from({ length: rounds * coachCount }, (_, i) => i + 1);
+  const existingOverallPickSet = new Set(
+    orderRows
+      .filter((r) => r.coach_id != null)
+      .map((r) => r.overall_pick)
+  );
+
+  const missingRounds = new Set<number>();
+
+  for (const overallPick of expectedOverallPicks) {
+    if (!existingOverallPickSet.has(overallPick)) {
+      const { round } = overallToRoundPick(overallPick, coachCount);
+      missingRounds.add(round);
+    }
+  }
+
+  return compressRoundNumbersToRanges(Array.from(missingRounds));
+}
+
 export async function runDraftSimulation(params: SimulateDraftParams): Promise<SimulateDraftResult> {
   const roomId = params.roomId.trim();
-  const manualCoachIds = Array.from(new Set((params.manualCoachIds ?? []).map(Number).filter((n) => Number.isFinite(n) && n > 0)));
+  const manualCoachIds = Array.from(
+    new Set((params.manualCoachIds ?? []).map(Number).filter((n) => Number.isFinite(n) && n > 0))
+  );
   const resetDraft = params.resetDraft !== false;
 
   if (!roomId) {
@@ -252,7 +299,18 @@ export async function runDraftSimulation(params: SimulateDraftParams): Promise<S
   const totalPicks = rounds * coachCount;
 
   const orderRowsForDraft = orderRows.filter((r) => r.overall_pick >= 1 && r.overall_pick <= totalPicks);
+
   if (orderRowsForDraft.length < totalPicks) {
+    const missingRoundRanges = findMissingRoundRanges(orderRowsForDraft, rounds, coachCount);
+
+    if (missingRoundRanges.length) {
+      throw new Error(
+        `Missing draft order for these round ranges: ${missingRoundRanges.join(
+          ", "
+        )}. Generate those snake blocks first, then run the simulation again.`
+      );
+    }
+
     throw new Error(
       `draft_order only has ${orderRowsForDraft.length} rows for the first ${rounds} rounds. Generate snake order for all required rounds first.`
     );
