@@ -51,7 +51,6 @@ const BLOCKS = [
 
 const ROOM_DISPLAY_NAME = "Super8 Draft";
 
-// Proxy pick tabs (same concept as DraftClient)
 const POS_TABS = ["ALL", "KD", "DEF", "MID", "FOR", "KF", "RUC"] as const;
 type PosTab = (typeof POS_TABS)[number];
 
@@ -171,6 +170,12 @@ export default function AdminClient() {
   const [proxySortDir, setProxySortDir] = useState<"asc" | "desc">("desc");
   const [proxyShowDrafted, setProxyShowDrafted] = useState(false);
 
+  const [simWaitingForManual, setSimWaitingForManual] = useState(false);
+  const [simStoppedForCoachId, setSimStoppedForCoachId] = useState<number | null>(null);
+  const [simHasActiveSession, setSimHasActiveSession] = useState(false);
+
+  const autoResumeLockRef = useRef(false);
+
   const fieldBase: React.CSSProperties = {
     width: "100%",
     padding: 10,
@@ -192,11 +197,12 @@ export default function AdminClient() {
   const simProgressMax = Math.max(1, simProgressTotal - simProgressStart);
   const simProgressPct = Math.max(0, Math.min(100, Math.round((simProgressMade / simProgressMax) * 100)));
 
-  async function fetchDraftPickCount(room: string) {
+  async function fetchDraftedPlayerCount(room: string) {
     const { count, error } = await supabase
-      .from("draft_picks")
+      .from("players")
       .select("*", { count: "exact", head: true })
-      .eq("room_id", room);
+      .eq("room_id", room)
+      .not("drafted_by_coach_id", "is", null);
 
     if (error) throw new Error(error.message);
     return count ?? 0;
@@ -219,20 +225,19 @@ export default function AdminClient() {
 
     const poll = async () => {
       try {
-        const count = await fetchDraftPickCount(room);
+        const count = await fetchDraftedPlayerCount(room);
         setSimProgressCurrent(count);
 
-        const currentRound = draftState?.current_round;
-        const currentPick = draftState?.current_pick_in_round;
-        const currentCoach = draftState?.current_coach_id;
-
-        if (currentRound && currentPick && currentCoach) {
-          setSimProgressLabel(`Round ${currentRound} • Pick ${currentPick} • Coach ${currentCoach}`);
+        if (draftState?.current_round && draftState?.current_pick_in_round && draftState?.current_coach_id) {
+          const pausedText = draftState.is_paused ? " • PAUSED" : "";
+          setSimProgressLabel(
+            `Round ${draftState.current_round} • Pick ${draftState.current_pick_in_round} • Coach ${draftState.current_coach_id}${pausedText}`
+          );
         } else {
           setSimProgressLabel(`Processed ${count} picks so far...`);
         }
       } catch {
-        // keep UI alive even if a single poll fails
+        // ignore a single failed poll
       }
     };
 
@@ -249,7 +254,7 @@ export default function AdminClient() {
     };
   }, []);
 
-  async function simulate8CoachDraft() {
+  async function runSimulation(options?: { resetDraft?: boolean; isAutoResume?: boolean }) {
     setToolsMsg("");
     if (!roomId.trim()) return setToolsMsg("Room id is required.");
 
@@ -258,55 +263,68 @@ export default function AdminClient() {
       return setToolsMsg("Rounds must be a valid positive number.");
     }
 
-    const manualLabel =
-      manualCoachIdsParsed.length > 0 ? `Manual coaches: [${manualCoachIdsParsed.join(", ")}]` : "Manual coaches: none";
+    const resetFirst = options?.resetDraft ?? resetDraftBeforeSim;
+    const isAutoResume = options?.isAutoResume ?? false;
 
-    const ok = window.confirm(
-      `Run 8-coach draft simulation for room "${roomId.trim()}"?\n\n${manualLabel}\nRounds: ${roundsNum}\nReset before sim: ${
-        resetDraftBeforeSim ? "YES" : "NO"
-      }\n\nIf manual coach IDs are included, the simulation will stop when one of those coaches is on the clock.`
-    );
-    if (!ok) return;
+    if (!isAutoResume) {
+      const manualLabel =
+        manualCoachIdsParsed.length > 0 ? `Manual coaches: [${manualCoachIdsParsed.join(", ")}]` : "Manual coaches: none";
+
+      const ok = window.confirm(
+        `Run 8-coach draft simulation for room "${roomId.trim()}"?\n\n${manualLabel}\nRounds: ${roundsNum}\nReset before sim: ${
+          resetFirst ? "YES" : "NO"
+        }\n\nIf manual coach IDs are included, the simulation will stop when one of those coaches is on the clock.`
+      );
+      if (!ok) return;
+    }
 
     setToolsBusy(true);
 
     try {
-      const existingCount = resetDraftBeforeSim ? 0 : await fetchDraftPickCount(roomId.trim());
+      const existingCount = resetFirst ? 0 : await fetchDraftedPlayerCount(roomId.trim());
       setSimProgressStart(existingCount);
       setSimProgressCurrent(existingCount);
       setSimProgressTotal(roundsNum * 8);
-      setSimProgressLabel("Starting simulation...");
-      startSimProgressPolling(roomId.trim(), roundsNum, resetDraftBeforeSim);
+      setSimProgressLabel(isAutoResume ? "Resuming simulation..." : "Starting simulation...");
+      startSimProgressPolling(roomId.trim(), roundsNum, resetFirst);
 
       const { res, json } = await postJson("/api/admin/simulate-draft", {
         roomId: roomId.trim(),
         rounds: roundsNum,
         manualCoachIds: manualCoachIdsParsed,
-        resetDraft: resetDraftBeforeSim,
+        resetDraft: resetFirst,
       });
 
       stopSimProgressPolling();
 
       try {
-        const finalCount = await fetchDraftPickCount(roomId.trim());
+        const finalCount = await fetchDraftedPlayerCount(roomId.trim());
         setSimProgressCurrent(finalCount);
       } catch {
-        // ignore final count failure
+        // ignore
       }
 
       if (!res.ok || !json?.ok) {
         setToolsMsg(`Sim failed: ${json?.error || json?.message || "Unknown error"}`);
         setSimProgressLabel("Simulation failed");
+        setSimWaitingForManual(false);
+        setSimStoppedForCoachId(null);
+        setSimHasActiveSession(false);
       } else if (json?.status === "waiting_for_manual_pick") {
-        setToolsMsg(
-          `⏸️ Sim paused for manual coach ${json?.stoppedForCoachId ?? "?"} at overall pick ${json?.stoppedAtOverallPick ?? "?"}.`
-        );
-        setSimProgressLabel(
-          `Waiting for manual coach ${json?.stoppedForCoachId ?? "?"} at overall pick ${json?.stoppedAtOverallPick ?? "?"}`
-        );
+        const stoppedCoach = Number(json?.stoppedForCoachId ?? 0) || null;
+        const stoppedPick = json?.stoppedAtOverallPick ?? "?";
+
+        setToolsMsg(`⏸️ Sim paused for manual coach ${stoppedCoach ?? "?"} at overall pick ${stoppedPick}.`);
+        setSimProgressLabel(`Waiting for manual coach ${stoppedCoach ?? "?"} at overall pick ${stoppedPick}`);
+        setSimWaitingForManual(true);
+        setSimStoppedForCoachId(stoppedCoach);
+        setSimHasActiveSession(true);
       } else {
         setToolsMsg(`✅ Sim complete: ${json?.picksDone ?? 0} picks (${json?.message || "done"})`);
         setSimProgressLabel("Simulation complete");
+        setSimWaitingForManual(false);
+        setSimStoppedForCoachId(null);
+        setSimHasActiveSession(false);
       }
 
       await loadDraftState(roomId.trim());
@@ -317,8 +335,24 @@ export default function AdminClient() {
       stopSimProgressPolling();
       setToolsMsg(`Sim failed: ${e?.message || String(e)}`);
       setSimProgressLabel("Simulation failed");
+      setSimWaitingForManual(false);
+      setSimStoppedForCoachId(null);
     } finally {
       setToolsBusy(false);
+    }
+  }
+
+  async function simulate8CoachDraft() {
+    await runSimulation();
+  }
+
+  async function resumeSimulationAfterManualPick() {
+    if (autoResumeLockRef.current) return;
+    autoResumeLockRef.current = true;
+    try {
+      await runSimulation({ resetDraft: false, isAutoResume: true });
+    } finally {
+      autoResumeLockRef.current = false;
     }
   }
 
@@ -368,6 +402,26 @@ export default function AdminClient() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
+
+  useEffect(() => {
+    if (!roomId.trim()) return;
+    if (!simHasActiveSession) return;
+    if (!simWaitingForManual) return;
+    if (toolsBusy) return;
+    if (!simStoppedForCoachId) return;
+    if (!draftState) return;
+
+    const coachMovedOn = draftState.current_coach_id !== simStoppedForCoachId;
+    const draftStillLive = !draftState.is_paused;
+
+    if (coachMovedOn && draftStillLive) {
+      setToolsMsg(
+        `▶️ Manual pick detected for coach ${simStoppedForCoachId}. Resuming simulation from coach ${draftState.current_coach_id}...`
+      );
+      setSimWaitingForManual(false);
+      void resumeSimulationAfterManualPick();
+    }
+  }, [roomId, simHasActiveSession, simWaitingForManual, simStoppedForCoachId, draftState, toolsBusy]);
 
   async function startDraft() {
     setDraftActionMsg("");
@@ -433,7 +487,7 @@ export default function AdminClient() {
     if (!roomId.trim()) return setDraftActionMsg("Room id is required.");
 
     const ok = window.confirm(
-      `RESET the draft for "${ROOM_DISPLAY_NAME}"?\n\nThis should reset draft_state + clear drafted players (depending on your RPC/route).\n\nThis cannot be undone.`
+      `RESET the draft for "${ROOM_DISPLAY_NAME}"?\n\nThis should reset draft_state + clear drafted players.\n\nThis cannot be undone.`
     );
     if (!ok) return;
 
@@ -445,6 +499,12 @@ export default function AdminClient() {
         setDraftActionMsg(`Reset failed: ${json?.error || json?.message || "Unknown error"}`);
       } else {
         setDraftActionMsg("♻️ Draft reset");
+        setSimWaitingForManual(false);
+        setSimStoppedForCoachId(null);
+        setSimHasActiveSession(false);
+        setSimProgressStart(0);
+        setSimProgressCurrent(0);
+        setSimProgressLabel("Draft reset");
         await loadDraftState(roomId.trim());
         await loadData(roomId.trim());
         await loadProxyPlayers(roomId.trim());
@@ -1588,6 +1648,13 @@ export default function AdminClient() {
                   <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900 }}>
                     {simProgressPct}% • {simProgressLabel}
                   </div>
+
+                  {simWaitingForManual && simStoppedForCoachId ? (
+                    <div style={{ marginTop: 6, fontSize: 12, fontWeight: 900, color: "#b54708" }}>
+                      Waiting for manual coach {simStoppedForCoachId} to make their pick. The sim will auto-resume after
+                      that pick is made.
+                    </div>
+                  ) : null}
 
                   {draftState ? (
                     <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>

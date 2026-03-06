@@ -208,14 +208,20 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   async function loadState() {
     setStateError(null);
 
-    const data = await fetchLatestState();
+    const { data, error } = await supabase
+      .from("draft_state")
+      .select("room_id,is_paused,pause_reason,rounds_total,current_round,current_pick_in_round,current_coach_id")
+      .eq("room_id", room)
+      .maybeSingle();
 
-    if (!data) {
+    if (error) {
+      console.error("draft loadState error:", error);
+      setStateError(formatSbError(error));
       setState(null);
       return;
     }
 
-    setState(data);
+    setState((data as DraftState) || null);
   }
 
   async function loadPlayers() {
@@ -538,8 +544,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       console.error("draft draft_pick RPC error:", error);
       alert("Draft failed: " + (error?.message ?? "Unknown error"));
       setBusy(false);
-      await loadState();
-      await loadPlayers();
+      await Promise.all([loadState(), loadPlayers(), loadDraftOrder(), loadCoaches()]);
       return;
     }
 
@@ -556,10 +561,12 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       }
 
       setBusy(false);
-      await loadPlayers();
+      await Promise.all([loadState(), loadPlayers(), loadDraftOrder(), loadCoaches()]);
       return;
     }
 
+    await Promise.all([loadState(), loadPlayers(), loadDraftOrder(), loadCoaches()]);
+    setConfirm({ open: false, player: null });
     setBusy(false);
   }
 
@@ -610,7 +617,6 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       }
     }
 
-    closeConfirm();
     await doDraft(p);
   }
 
@@ -1314,7 +1320,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     cursor: "pointer",
                   }}
                 >
-                  Cancel Draft
+                  Cancel Pick
                 </button>
 
                 <button
@@ -1331,7 +1337,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     cursor: busy ? "not-allowed" : "pointer",
                   }}
                 >
-                  {busy ? "Drafting..." : "Confirm Draft Pick"}
+                  {busy ? "Drafting..." : "Confirm Pick"}
                 </button>
               </div>
 
