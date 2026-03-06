@@ -150,6 +150,9 @@ export default function AdminClient() {
 
   const [toolsBusy, setToolsBusy] = useState(false);
   const [toolsMsg, setToolsMsg] = useState("");
+  const [manualCoachIdsStr, setManualCoachIdsStr] = useState("");
+  const [simRounds, setSimRounds] = useState("46");
+  const [resetDraftBeforeSim, setResetDraftBeforeSim] = useState(true);
 
   const [proxyCoachId, setProxyCoachId] = useState<number>(1);
   const [proxyMsg, setProxyMsg] = useState<string>("");
@@ -172,12 +175,29 @@ export default function AdminClient() {
     outline: "none",
   };
 
-  async function simulate2CoachDraft() {
+  const manualCoachIdsParsed = useMemo(() => {
+    return manualCoachIdsStr
+      .split(",")
+      .map((x) => Number(x.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+  }, [manualCoachIdsStr]);
+
+  async function simulate8CoachDraft() {
     setToolsMsg("");
     if (!roomId.trim()) return setToolsMsg("Room id is required.");
 
+    const roundsNum = Number(simRounds.trim());
+    if (!Number.isFinite(roundsNum) || roundsNum <= 0) {
+      return setToolsMsg("Rounds must be a valid positive number.");
+    }
+
+    const manualLabel =
+      manualCoachIdsParsed.length > 0 ? `Manual coaches: [${manualCoachIdsParsed.join(", ")}]` : "Manual coaches: none";
+
     const ok = window.confirm(
-      `Simulate a FULL draft for 2 coaches in room "${roomId.trim()}"?\n\nThis will make many picks and write them to draft_picks.\nMake sure the room is intended for 2-coach sim.`
+      `Run 8-coach draft simulation for room "${roomId.trim()}"?\n\n${manualLabel}\nRounds: ${roundsNum}\nReset before sim: ${
+        resetDraftBeforeSim ? "YES" : "NO"
+      }\n\nIf manual coach IDs are included, the simulation will stop when one of those coaches is on the clock.`
     );
     if (!ok) return;
 
@@ -185,20 +205,25 @@ export default function AdminClient() {
     try {
       const { res, json } = await postJson("/api/admin/simulate-draft", {
         roomId: roomId.trim(),
-        coachIds: [1, 2],
-        rounds: 46,
-        pickRule: "highest_average",
+        rounds: roundsNum,
+        manualCoachIds: manualCoachIdsParsed,
+        resetDraft: resetDraftBeforeSim,
       });
 
       if (!res.ok || !json?.ok) {
         setToolsMsg(`Sim failed: ${json?.error || json?.message || "Unknown error"}`);
+      } else if (json?.status === "waiting_for_manual_pick") {
+        setToolsMsg(
+          `⏸️ Sim paused for manual coach ${json?.stoppedForCoachId ?? "?"} at overall pick ${json?.stoppedAtOverallPick ?? "?"}.`
+        );
       } else {
         setToolsMsg(`✅ Sim complete: ${json?.picksDone ?? 0} picks (${json?.message || "done"})`);
-        await loadDraftState(roomId.trim());
-        await loadData(roomId.trim());
-        await loadProxyPlayers(roomId.trim());
-        setRefreshKey((k) => k + 1);
       }
+
+      await loadDraftState(roomId.trim());
+      await loadData(roomId.trim());
+      await loadProxyPlayers(roomId.trim());
+      setRefreshKey((k) => k + 1);
     } catch (e: any) {
       setToolsMsg(`Sim failed: ${e?.message || String(e)}`);
     } finally {
@@ -206,7 +231,7 @@ export default function AdminClient() {
     }
   }
 
-  function exportPicksCsv() {
+  function exportPicksXlsx() {
     setToolsMsg("");
     if (!roomId.trim()) return setToolsMsg("Room id is required.");
     window.open(`/api/admin/export-picks?room=${encodeURIComponent(roomId.trim())}`, "_blank");
@@ -1386,22 +1411,63 @@ export default function AdminClient() {
       >
         {showDebug ? (
           <div style={{ display: "grid", gap: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ display: "grid", gap: 10 }}>
               <div>
                 <SmallText>
-                  Simulate a 2-coach draft and export picks as CSV (from <code>draft_picks</code>).
+                  Run the 8-coach simulator using the room’s current <code>draft_order</code>. Leave manual coach IDs
+                  blank for a full auto sim, or enter coach IDs like <strong>2,7</strong> to stop when those coaches
+                  are on the clock.
                 </SmallText>
                 {toolsMsg ? <div style={{ marginTop: 10, fontWeight: 950 }}>{toolsMsg}</div> : null}
               </div>
 
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <Button variant="primary" onClick={simulate2CoachDraft} disabled={toolsBusy || !roomId.trim()}>
-                  {toolsBusy ? "Simulating..." : "Simulate 2-coach draft"}
-                </Button>
+              <div style={{ display: "grid", gap: 10, maxWidth: 760 }}>
+                <label>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Manual coach IDs (optional, comma separated)</div>
+                  <input
+                    suppressHydrationWarning
+                    value={manualCoachIdsStr}
+                    onChange={(e) => setManualCoachIdsStr(e.target.value)}
+                    placeholder="e.g. 2,7"
+                    style={fieldBase}
+                  />
+                  <SmallText>
+                    Parsed:{" "}
+                    <strong>
+                      {manualCoachIdsParsed.length ? `[${manualCoachIdsParsed.join(", ")}]` : "none"}
+                    </strong>
+                  </SmallText>
+                </label>
 
-                <Button onClick={exportPicksCsv} disabled={toolsBusy || !roomId.trim()}>
-                  Export picks (CSV)
-                </Button>
+                <label>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Rounds</div>
+                  <input
+                    suppressHydrationWarning
+                    value={simRounds}
+                    onChange={(e) => setSimRounds(e.target.value)}
+                    placeholder="46"
+                    style={fieldBase}
+                  />
+                </label>
+
+                <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={resetDraftBeforeSim}
+                    onChange={(e) => setResetDraftBeforeSim(e.target.checked)}
+                  />
+                  <span style={{ fontWeight: 900 }}>Reset draft before simulation</span>
+                </label>
+
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <Button variant="primary" onClick={simulate8CoachDraft} disabled={toolsBusy || !roomId.trim()}>
+                    {toolsBusy ? "Simulating..." : "Run 8-coach simulation"}
+                  </Button>
+
+                  <Button onClick={exportPicksXlsx} disabled={toolsBusy || !roomId.trim()}>
+                    Export picks (XLSX)
+                  </Button>
+                </div>
               </div>
             </div>
 
