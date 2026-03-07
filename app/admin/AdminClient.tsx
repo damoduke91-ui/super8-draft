@@ -356,10 +356,27 @@ export default function AdminClient() {
     }
   }
 
-  function exportPicksXlsx() {
+   function exportPicksXlsx() {
     setToolsMsg("");
     if (!roomId.trim()) return setToolsMsg("Room id is required.");
     window.open(`/api/admin/export-picks?room=${encodeURIComponent(roomId.trim())}`, "_blank");
+  }
+
+  function applyCoachPreset(mode: "two-coach-3-first" | "two-coach-3-second" | "full-8") {
+    setShuffle(false);
+    setSeed("");
+
+    if (mode === "two-coach-3-first") {
+      setCoachIdsStr("3,1");
+      return;
+    }
+
+    if (mode === "two-coach-3-second") {
+      setCoachIdsStr("1,3");
+      return;
+    }
+
+    setCoachIdsStr("1,2,3,4,5,6,7,8");
   }
 
   async function loadDraftState(room: string) {
@@ -1086,7 +1103,7 @@ export default function AdminClient() {
             </select>
           </label>
 
-          <label>
+                    <label>
             <div style={{ fontWeight: 900, marginBottom: 6 }}>Coach IDs (comma separated)</div>
             <input
               suppressHydrationWarning
@@ -1094,6 +1111,21 @@ export default function AdminClient() {
               onChange={(e) => setCoachIdsStr(e.target.value)}
               style={fieldBase}
             />
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+              <Button onClick={() => applyCoachPreset("two-coach-3-first")} disabled={busy}>
+                2 Coach Test: 3 then 1
+              </Button>
+
+              <Button onClick={() => applyCoachPreset("two-coach-3-second")} disabled={busy}>
+                2 Coach Test: 1 then 3
+              </Button>
+
+              <Button onClick={() => applyCoachPreset("full-8")} disabled={busy}>
+                Restore Full 8
+              </Button>
+            </div>
+
             <SmallText>
               Parsed: <strong>[{coachIdsParsed.join(", ")}]</strong>
             </SmallText>
