@@ -69,19 +69,39 @@ export async function POST(req: Request) {
 
     const supabase = adminSupabase();
 
-    const rows = order.map((player_no: number, i: number) => ({
+    const cleanOrder = Array.from(
+      new Set(
+        order
+          .map((n: unknown) => Number(n))
+          .filter((n: number) => Number.isFinite(n) && n > 0)
+      )
+    );
+
+    const rows = cleanOrder.map((player_no: number, i: number) => ({
       room_id: roomId,
       coach_id: coachId,
       player_no,
       rank: i + 1,
     }));
 
-    const { error } = await supabase
+    const { error: deleteError } = await supabase
       .from("coach_custom_order")
-      .upsert(rows, { onConflict: "room_id,coach_id,player_no" });
+      .delete()
+      .eq("room_id", roomId)
+      .eq("coach_id", coachId);
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
+    if (deleteError) {
+      return NextResponse.json({ error: deleteError.message }, { status: 400 });
+    }
+
+    if (rows.length > 0) {
+      const { error: insertError } = await supabase
+        .from("coach_custom_order")
+        .insert(rows);
+
+      if (insertError) {
+        return NextResponse.json({ error: insertError.message }, { status: 400 });
+      }
     }
 
     return NextResponse.json({
