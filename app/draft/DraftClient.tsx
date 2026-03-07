@@ -268,9 +268,11 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
 
   const [confirm, setConfirm] = useState<ConfirmState>({ open: false, player: null });
   const [dontAskAgain, setDontAskAgain] = useState(false);
-  const [skipConfirm, setSkipConfirm] = useState(false);
+    const [skipConfirm, setSkipConfirm] = useState(false);
 
   const [customOrder, setCustomOrder] = useState<number[]>([]);
+  const [customOrderDirty, setCustomOrderDirty] = useState(false);
+  const [customOrderSaving, setCustomOrderSaving] = useState(false);
 
   const skipKey = useMemo(() => `super8_skip_confirm:${room}:${coachId}`, [room, coachId]);
   
@@ -304,18 +306,21 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       const saved = await loadCustomOrderFromSupabase(room, coachId);
       if (cancelled) return;
 
-      const merged = mergeCustomOrder(saved, players);
+            const merged = mergeCustomOrder(saved, players);
       const fallback = buildDefaultCustomOrder(players);
       const next = merged.length > 0 ? merged : fallback;
       setCustomOrder(next);
+      setCustomOrderDirty(false);
 
       if (saved.length === 0 && next.length > 0) {
         await saveCustomOrderToSupabase(room, coachId, next);
+        if (!cancelled) setCustomOrderDirty(false);
       }
-    } catch {
+        } catch {
       if (cancelled) return;
       const fallback = buildDefaultCustomOrder(players);
       setCustomOrder(fallback);
+      setCustomOrderDirty(false);
     }
   }
 
@@ -326,10 +331,23 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   };
 }, [room, coachId, players.length, canUseCustomSort]);
 
-  function saveCustomOrder(nextOrder: number[]) {
-  setCustomOrder(nextOrder);
-  void saveCustomOrderToSupabase(room, coachId, nextOrder);
-}
+    function saveCustomOrder(nextOrder: number[]) {
+    setCustomOrder(nextOrder);
+    setCustomOrderDirty(true);
+  }
+
+  async function saveCustomOrderNow() {
+    if (!canUseCustomSort) return;
+    if (!customOrderDirty) return;
+
+    setCustomOrderSaving(true);
+    try {
+      await saveCustomOrderToSupabase(room, coachId, customOrder);
+      setCustomOrderDirty(false);
+    } finally {
+      setCustomOrderSaving(false);
+    }
+  }
 
   function schedule(key: "state" | "players" | "coaches" | "order", fn: () => void, ms = 150) {
     if (timersRef.current[key]) clearTimeout(timersRef.current[key]);
@@ -1327,23 +1345,43 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   {hideDrafted ? "Available only" : "Show drafted"}
                 </button>
 
-                {canUseCustomSort ? (
-                  <button
-                    type="button"
-                    onClick={resetCustomOrder}
-                    style={{
-                      padding: "11px 13px",
-                      borderRadius: 12,
-                      border: "1px solid #475467",
-                      background: "#111827",
-                      color: availableText,
-                      fontWeight: 900,
-                      cursor: "pointer",
-                    }}
-                    title="Reset custom order back to player number order"
-                  >
-                    Reset Custom
-                  </button>
+                                {canUseCustomSort ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={resetCustomOrder}
+                      style={{
+                        padding: "11px 13px",
+                        borderRadius: 12,
+                        border: "1px solid #475467",
+                        background: "#111827",
+                        color: availableText,
+                        fontWeight: 900,
+                        cursor: "pointer",
+                      }}
+                      title="Reset custom order back to player number order"
+                    >
+                      Reset Custom
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void saveCustomOrderNow()}
+                      disabled={!customOrderDirty || customOrderSaving}
+                      style={{
+                        padding: "11px 13px",
+                        borderRadius: 12,
+                        border: "1px solid #475467",
+                        background: !customOrderDirty || customOrderSaving ? "#475467" : "#f9fafb",
+                        color: !customOrderDirty || customOrderSaving ? "#d0d5dd" : "#101828",
+                        fontWeight: 1000,
+                        cursor: !customOrderDirty || customOrderSaving ? "not-allowed" : "pointer",
+                      }}
+                      title="Save custom order to Supabase"
+                    >
+                      {customOrderSaving ? "Saving..." : "Save Custom"}
+                    </button>
+                  </>
                 ) : null}
               </div>
 
@@ -1411,7 +1449,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 </span>
               </div>
 
-              {canUseCustomSort && sortKey === "custom" ? (
+                            {canUseCustomSort && sortKey === "custom" ? (
                 <div
                   style={{
                     marginBottom: 10,
@@ -1424,8 +1462,13 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     lineHeight: 1.5,
                   }}
                 >
-                  Coach 3 custom order is saved on this device. Use <strong>Top</strong>, <strong>↑</strong>, and{" "}
-                  <strong>↓</strong> to pre-rank players.
+                  Coach 3 custom order is stored in <strong>Supabase</strong>. Use <strong>Top</strong>, <strong>↑</strong>, and{" "}
+                  <strong>↓</strong> to pre-rank players, then click <strong>Save Custom</strong>.
+                  {customOrderDirty ? (
+                    <span style={{ marginLeft: 8, fontWeight: 1000, color: "#fde68a" }}>Unsaved changes</span>
+                  ) : (
+                    <span style={{ marginLeft: 8, fontWeight: 1000, color: "#86efac" }}>Saved</span>
+                  )}
                 </div>
               ) : null}
 
