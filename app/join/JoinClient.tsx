@@ -4,14 +4,14 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 const QUICK_COACHES = [
-  { id: 1, name: "Coach 1" },
-  { id: 2, name: "Coach 2" },
+  { id: 1, name: "Adrian" },
+  { id: 2, name: "Chris" },
   { id: 3, name: "Damian" },
-  { id: 4, name: "Coach 4" },
-  { id: 5, name: "Coach 5" },
-  { id: 6, name: "Coach 6" },
-  { id: 7, name: "Coach 7" },
-  { id: 8, name: "Coach 8" },
+  { id: 4, name: "Dane" },
+  { id: 5, name: "Josh" },
+  { id: 6, name: "Mark" },
+  { id: 7, name: "Rick" },
+  { id: 8, name: "Troy" },
 ];
 
 export default function JoinClient() {
