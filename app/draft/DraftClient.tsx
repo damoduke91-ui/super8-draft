@@ -938,12 +938,12 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     await doDraft(p);
   }
 
-  const availablePanelBg = "#1f2937";
-  const availableText = bestTextColor(availablePanelBg);
+  const availablePanelBg = "#0f172a";
+  const availableText = "#ffffff";
 
   const pageBg = "#eef2f7";
-  const panelBorder = "#d0d5dd";
-  const textMain = "#101828";
+  const panelBorder = "#cbd5e1";
+  const textMain = "#0f172a";
   const textSoft = "#475467";
 
   const chipStyle: CSSProperties = {
@@ -981,12 +981,12 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
             <div>
               <strong style={{ color: textMain, fontSize: 18 }}>{topBar}</strong>
 
-              <div
+                            <div
                 style={{
                   marginTop: 8,
-                  color: state?.is_paused ? "#b54708" : isMyTurn ? "#027a48" : textSoft,
-                  fontWeight: 900,
-                  fontSize: 15,
+                  color: state?.is_paused ? "#b54708" : isMyTurn ? "#067647" : "#344054",
+                  fontWeight: 1000,
+                  fontSize: 16,
                 }}
               >
                 {state?.current_round && state.current_round > MAX_ROUNDS
@@ -1149,9 +1149,9 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                             <div style={{ fontSize: 12, color: textSoft }}>Overall #{c.overall}</div>
 
                             {c.drafted ? (
-                              <div style={{ marginTop: 5, fontSize: 12 }}>
-                                <strong>{c.drafted.player_name}</strong>
-                                <div style={{ color: textSoft }}>
+                                                            <div style={{ marginTop: 5, fontSize: 12 }}>
+                                <strong style={{ color: textMain }}>{c.drafted.player_name}</strong>
+                                <div style={{ color: "#344054", fontWeight: 700 }}>
                                   #{c.drafted.player_no} • {c.drafted.pos} • {c.drafted.club}
                                 </div>
                               </div>
@@ -1298,14 +1298,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search name / club / # / pos…"
-                  style={{
+                                    style={{
                     flex: 1,
                     minWidth: 220,
                     padding: "11px 13px",
                     borderRadius: 12,
-                    border: "1px solid #475467",
-                    background: "#111827",
-                    color: availableText,
+                    border: "1px solid #64748b",
+                    background: "#0b1220",
+                    color: "#ffffff",
                     outline: "none",
                     fontWeight: 800,
                     fontSize: 14,
@@ -1386,12 +1386,12 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
               </div>
 
               <div
-                style={{
+                                style={{
                   display: "flex",
                   gap: 10,
                   fontSize: 12,
                   marginBottom: 10,
-                  color: "#e5e7eb",
+                  color: "#f8fafc",
                   alignItems: "center",
                   flexWrap: "wrap",
                 }}
@@ -1457,9 +1457,9 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     borderRadius: 12,
                     background: "#111827",
                     border: "1px solid #475467",
-                    color: "#e5e7eb",
+                                        color: "#f8fafc",
                     fontSize: 12,
-                    lineHeight: 1.5,
+                    lineHeight: 1.6,
                   }}
                 >
                   Coach 3 custom order is stored in <strong>Supabase</strong>. Use <strong>Top</strong>, <strong>↑</strong>, and{" "}
@@ -1507,7 +1507,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                         <div style={{ fontSize: 15 }}>
                           <strong style={{ color: availableText }}>{p.player_no}</strong> — {p.player_name}
                         </div>
-                        <div style={{ fontSize: 13, color: "#d0d5dd", marginTop: 2 }}>
+                                                <div style={{ fontSize: 13, color: "#e2e8f0", marginTop: 2, fontWeight: 700 }}>
                           {p.club} • {p.pos} • Avg {p.average}
                         </div>
                       </div>
@@ -1600,7 +1600,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 })}
 
                 {filtered.length === 0 ? (
-                  <div style={{ padding: 12, color: "#d0d5dd" }}>
+                                    <div style={{ padding: 12, color: "#f1f5f9", fontWeight: 700 }}>
                     No players found for {POS_LABEL[posTab]}
                     {search ? ` with “${search}”` : ""}.
                   </div>
