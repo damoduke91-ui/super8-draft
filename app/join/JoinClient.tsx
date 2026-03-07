@@ -175,9 +175,7 @@ export default function JoinClient() {
               })}
             </div>
 
-            <div style={{ marginTop: 10, fontSize: 13, color: textSoft }}>
-              For your manual test, choose <strong>Coach 3</strong>.
-            </div>
+            
           </div>
         </div>
 
