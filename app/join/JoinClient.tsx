@@ -23,6 +23,10 @@ export default function JoinClient() {
   const roomClean = useMemo(() => room.trim().toUpperCase(), [room]);
   const coachClean = useMemo(() => coach.trim(), [coach]);
 
+  const selectedCoach = useMemo(() => {
+    return QUICK_COACHES.find((c) => String(c.id) === coachClean) ?? null;
+  }, [coachClean]);
+
   const go = (path: string) => {
     if (!roomClean) {
       alert("Please enter a Room ID.");
@@ -162,11 +166,12 @@ export default function JoinClient() {
                     style={{
                       padding: "10px 12px",
                       borderRadius: 10,
-                      border: active ? "1px solid #111" : "1px solid #cbd5e1",
+                      border: active ? "2px solid #111" : "1px solid #cbd5e1",
                       background: active ? "#111" : "#fff",
                       color: active ? "#fff" : textMain,
-                      fontWeight: 800,
+                      fontWeight: 900,
                       cursor: "pointer",
+                      boxShadow: active ? "0 6px 18px rgba(17,17,17,0.16)" : "none",
                     }}
                   >
                     {c.id} {c.name}
@@ -175,7 +180,22 @@ export default function JoinClient() {
               })}
             </div>
 
-            
+            <div
+              style={{
+                marginTop: 12,
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #e4e7ec",
+                background: "#ffffff",
+                color: textSoft,
+                fontSize: 13,
+              }}
+            >
+              Selected coach:{" "}
+              <strong style={{ color: textMain }}>
+                {selectedCoach ? `${selectedCoach.id} ${selectedCoach.name}` : coachClean || "None"}
+              </strong>
+            </div>
           </div>
         </div>
 
