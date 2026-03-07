@@ -324,7 +324,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   return () => {
     cancelled = true;
   };
-}, [room, coachId, players, canUseCustomSort, sortKey]);
+}, [room, coachId]);
 
   function saveCustomOrder(nextOrder: number[]) {
   setCustomOrder(nextOrder);
