@@ -137,6 +137,7 @@ export default function AdminClient() {
   const [autoSaveAfterReset, setAutoSaveAfterReset] = useState(true);
 
   const [showDebug, setShowDebug] = useState(false);
+  const [showProxyPick, setShowProxyPick] = useState(false);
 
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -356,7 +357,7 @@ export default function AdminClient() {
     }
   }
 
-   function exportPicksXlsx() {
+  function exportPicksXlsx() {
     setToolsMsg("");
     if (!roomId.trim()) return setToolsMsg("Room id is required.");
     window.open(`/api/admin/export-picks?room=${encodeURIComponent(roomId.trim())}`, "_blank");
@@ -534,7 +535,7 @@ export default function AdminClient() {
     }
   }
 
-    const draftStatus = useMemo(() => {
+  const draftStatus = useMemo(() => {
     if (!draftState) return "No draft_state row yet";
 
     const isComplete =
@@ -1065,7 +1066,7 @@ export default function AdminClient() {
               Room: <strong>{ROOM_DISPLAY_NAME}</strong> • Status: <strong>{draftStatus}</strong>
             </SmallText>
 
-                        {draftState?.is_paused ? (
+            {draftState?.is_paused ? (
               <div style={{ marginTop: 8, fontSize: 12, opacity: 0.9 }}>
                 Reason: <strong>{pauseReasonLabel(draftState.pause_reason) ?? "Paused"}</strong>
                 {draftState.pause_reason === "Draft complete" ? (
@@ -1115,7 +1116,7 @@ export default function AdminClient() {
             </select>
           </label>
 
-                    <label>
+          <label>
             <div style={{ fontWeight: 900, marginBottom: 6 }}>Coach IDs (comma separated)</div>
             <input
               suppressHydrationWarning
@@ -1390,204 +1391,216 @@ export default function AdminClient() {
       <Card
         title="Admin Proxy Pick (Absent Coach)"
         right={
-          <SmallText>
-            room: <strong>{ROOM_DISPLAY_NAME}</strong>
-            {proxyBusy ? <span style={{ marginLeft: 8, opacity: 0.8 }}>• drafting…</span> : null}
-          </SmallText>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <SmallText>
+              room: <strong>{ROOM_DISPLAY_NAME}</strong>
+              {proxyBusy ? <span style={{ marginLeft: 8, opacity: 0.8 }}>• drafting…</span> : null}
+            </SmallText>
+
+            <Button onClick={() => setShowProxyPick((v) => !v)} disabled={anyBusy && !showProxyPick}>
+              {showProxyPick ? "Hide Admin Proxy Pick" : "Show Admin Proxy Pick"}
+            </Button>
+          </div>
         }
       >
-        <SmallText>
-          Use only if a coach is absent. This drafts on their behalf on the <strong>Admin screen</strong> (no new page).
-        </SmallText>
+        {showProxyPick ? (
+          <>
+            <SmallText>
+              Use only if a coach is absent. This drafts on their behalf on the <strong>Admin screen</strong> (no new page).
+            </SmallText>
 
-        <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ minWidth: 240 }}>
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>Coach</div>
-            <select value={proxyCoachId} onChange={(e) => setProxyCoachId(Number(e.target.value))} style={fieldBase}>
-              {coachOptions.length
-                ? coachOptions.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))
-                : [1, 2, 3, 4, 5, 6, 7, 8].map((id) => (
-                    <option key={id} value={id}>
-                      Coach {id}
-                    </option>
-                  ))}
-            </select>
-          </div>
+            <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ minWidth: 240 }}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>Coach</div>
+                <select value={proxyCoachId} onChange={(e) => setProxyCoachId(Number(e.target.value))} style={fieldBase}>
+                  {coachOptions.length
+                    ? coachOptions.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))
+                    : [1, 2, 3, 4, 5, 6, 7, 8].map((id) => (
+                        <option key={id} value={id}>
+                          Coach {id}
+                        </option>
+                      ))}
+                </select>
+              </div>
 
-          <div style={{ flex: 1, minWidth: 260 }}>
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>Search</div>
-            <input
-              suppressHydrationWarning
-              value={proxySearch}
-              onChange={(e) => setProxySearch(e.target.value)}
-              placeholder="Search name / club / # / pos…"
-              style={fieldBase}
-            />
-          </div>
+              <div style={{ flex: 1, minWidth: 260 }}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>Search</div>
+                <input
+                  suppressHydrationWarning
+                  value={proxySearch}
+                  onChange={(e) => setProxySearch(e.target.value)}
+                  placeholder="Search name / club / # / pos…"
+                  style={fieldBase}
+                />
+              </div>
 
-          <Button
-            onClick={() => {
-              setProxyMsg("");
-              setProxyErr("");
-              loadProxyPlayers(roomId.trim());
-            }}
-            disabled={anyBusy || !roomId.trim()}
-          >
-            Refresh players
-          </Button>
-        </div>
-
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
-          {POS_TABS.map((k) => {
-            const active = proxyTab === k;
-            return (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setProxyTab(k)}
-                style={{
-                  padding: "8px 12px",
-                  borderRadius: 10,
-                  border: active ? "2px solid #111" : "1px solid #d1d5db",
-                  background: active ? "#111" : "#fff",
-                  color: active ? "#fff" : "#111",
-                  fontWeight: 950,
-                  cursor: "pointer",
+              <Button
+                onClick={() => {
+                  setProxyMsg("");
+                  setProxyErr("");
+                  loadProxyPlayers(roomId.trim());
                 }}
+                disabled={anyBusy || !roomId.trim()}
               >
-                {POS_LABEL[k]}
-              </button>
-            );
-          })}
+                Refresh players
+              </Button>
+            </div>
 
-          <button
-            type="button"
-            onClick={() => setProxyShowDrafted((v) => !v)}
-            style={{
-              padding: "8px 12px",
-              borderRadius: 10,
-              border: "1px solid #d1d5db",
-              background: proxyShowDrafted ? "#fff6d6" : "#fff",
-              color: "#111",
-              fontWeight: 950,
-              cursor: "pointer",
-            }}
-            title="Show/hide drafted players"
-          >
-            {proxyShowDrafted ? "Showing drafted too" : "Available only"}
-          </button>
-        </div>
-
-        {proxyErr ? (
-          <div
-            style={{
-              marginTop: 10,
-              padding: 10,
-              borderRadius: 12,
-              border: "1px solid #f2c2c2",
-              background: "#fff5f5",
-              fontWeight: 900,
-            }}
-          >
-            {proxyErr}
-          </div>
-        ) : null}
-
-        {proxyMsg ? <div style={{ marginTop: 10, fontWeight: 950 }}>{proxyMsg}</div> : null}
-
-        <div style={{ marginTop: 10 }}>
-          <SmallText>
-            Sorting:{" "}
-            <button type="button" onClick={() => toggleProxySort("average")} style={{ fontWeight: 900 }}>
-              Avg
-            </button>{" "}
-            ·{" "}
-            <button type="button" onClick={() => toggleProxySort("player_no")} style={{ fontWeight: 900 }}>
-              #
-            </button>{" "}
-            ·{" "}
-            <button type="button" onClick={() => toggleProxySort("player_name")} style={{ fontWeight: 900 }}>
-              Name
-            </button>{" "}
-            ·{" "}
-            <button type="button" onClick={() => toggleProxySort("club")} style={{ fontWeight: 900 }}>
-              Club
-            </button>{" "}
-            <span style={{ opacity: 0.75 }}>
-              ({proxySortKey} {proxySortDir}) • showing <strong>{proxyFiltered.length}</strong>
-            </span>
-          </SmallText>
-        </div>
-
-        <div style={{ marginTop: 10, overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>#</th>
-                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Player</th>
-                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Pos</th>
-                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Club</th>
-                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Avg</th>
-                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {proxyFiltered.slice(0, 120).map((p) => {
-                const drafted = p.drafted_by_coach_id != null;
-                const disabled = proxyBusy || !draftState || !!draftState?.is_paused || drafted || !roomId.trim();
-
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
+              {POS_TABS.map((k) => {
+                const active = proxyTab === k;
                 return (
-                  <tr key={p.player_no} style={{ opacity: disabled ? 0.75 : 1 }}>
-                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6", fontWeight: 950 }}>{p.player_no}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6", fontWeight: 900 }}>
-                      {p.player_name}
-                      {drafted ? (
-                        <div style={{ marginTop: 2, fontSize: 12, opacity: 0.75 }}>
-                          Drafted by Coach {p.drafted_by_coach_id} ({p.drafted_round}.{p.drafted_pick})
-                        </div>
-                      ) : null}
-                    </td>
-                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{p.pos}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{p.club}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{p.average}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>
-                      <Button variant="primary" onClick={() => proxyDraftPlayer(p)} disabled={disabled}>
-                        {proxyBusy ? "Drafting..." : `Draft for ${proxyCoachName}`}
-                      </Button>
-                    </td>
-                  </tr>
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setProxyTab(k)}
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: 10,
+                      border: active ? "2px solid #111" : "1px solid #d1d5db",
+                      background: active ? "#111" : "#fff",
+                      color: active ? "#fff" : "#111",
+                      fontWeight: 950,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {POS_LABEL[k]}
+                  </button>
                 );
               })}
 
-              {proxyFiltered.length === 0 ? (
-                <tr>
-                  <td colSpan={6} style={{ padding: 10, opacity: 0.75 }}>
-                    No players match your filters.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
+              <button
+                type="button"
+                onClick={() => setProxyShowDrafted((v) => !v)}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 10,
+                  border: "1px solid #d1d5db",
+                  background: proxyShowDrafted ? "#fff6d6" : "#fff",
+                  color: "#111",
+                  fontWeight: 950,
+                  cursor: "pointer",
+                }}
+                title="Show/hide drafted players"
+              >
+                {proxyShowDrafted ? "Showing drafted too" : "Available only"}
+              </button>
+            </div>
 
-          {proxyFiltered.length > 120 ? (
-            <div style={{ marginTop: 8 }}>
+            {proxyErr ? (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: 10,
+                  borderRadius: 12,
+                  border: "1px solid #f2c2c2",
+                  background: "#fff5f5",
+                  fontWeight: 900,
+                }}
+              >
+                {proxyErr}
+              </div>
+            ) : null}
+
+            {proxyMsg ? <div style={{ marginTop: 10, fontWeight: 950 }}>{proxyMsg}</div> : null}
+
+            <div style={{ marginTop: 10 }}>
               <SmallText>
-                Showing first <strong>120</strong> results (to keep Admin fast). Narrow with search/tabs.
+                Sorting:{" "}
+                <button type="button" onClick={() => toggleProxySort("average")} style={{ fontWeight: 900 }}>
+                  Avg
+                </button>{" "}
+                ·{" "}
+                <button type="button" onClick={() => toggleProxySort("player_no")} style={{ fontWeight: 900 }}>
+                  #
+                </button>{" "}
+                ·{" "}
+                <button type="button" onClick={() => toggleProxySort("player_name")} style={{ fontWeight: 900 }}>
+                  Name
+                </button>{" "}
+                ·{" "}
+                <button type="button" onClick={() => toggleProxySort("club")} style={{ fontWeight: 900 }}>
+                  Club
+                </button>{" "}
+                <span style={{ opacity: 0.75 }}>
+                  ({proxySortKey} {proxySortDir}) • showing <strong>{proxyFiltered.length}</strong>
+                </span>
               </SmallText>
             </div>
-          ) : null}
-        </div>
 
-        <div style={{ marginTop: 10 }}>
-          <SmallText>
-            Safety rules: proxy draft is blocked if the draft is <strong>paused</strong>. It uses{" "}
-            <code>p_override_turn: true</code> so Admin can draft for an absent coach even if it’s not that coach’s pick.
-          </SmallText>
-        </div>
+            <div style={{ marginTop: 10, overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>#</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Player</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Pos</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Club</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Avg</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {proxyFiltered.slice(0, 120).map((p) => {
+                    const drafted = p.drafted_by_coach_id != null;
+                    const disabled = proxyBusy || !draftState || !!draftState?.is_paused || drafted || !roomId.trim();
+
+                    return (
+                      <tr key={p.player_no} style={{ opacity: disabled ? 0.75 : 1 }}>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6", fontWeight: 950 }}>{p.player_no}</td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6", fontWeight: 900 }}>
+                          {p.player_name}
+                          {drafted ? (
+                            <div style={{ marginTop: 2, fontSize: 12, opacity: 0.75 }}>
+                              Drafted by Coach {p.drafted_by_coach_id} ({p.drafted_round}.{p.drafted_pick})
+                            </div>
+                          ) : null}
+                        </td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{p.pos}</td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{p.club}</td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{p.average}</td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>
+                          <Button variant="primary" onClick={() => proxyDraftPlayer(p)} disabled={disabled}>
+                            {proxyBusy ? "Drafting..." : `Draft for ${proxyCoachName}`}
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {proxyFiltered.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} style={{ padding: 10, opacity: 0.75 }}>
+                        No players match your filters.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+
+              {proxyFiltered.length > 120 ? (
+                <div style={{ marginTop: 8 }}>
+                  <SmallText>
+                    Showing first <strong>120</strong> results (to keep Admin fast). Narrow with search/tabs.
+                  </SmallText>
+                </div>
+              ) : null}
+            </div>
+
+            <div style={{ marginTop: 10 }}>
+              <SmallText>
+                Safety rules: proxy draft is blocked if the draft is <strong>paused</strong>. It uses{" "}
+                <code>p_override_turn: true</code> so Admin can draft for an absent coach even if it’s not that coach’s pick.
+              </SmallText>
+            </div>
+          </>
+        ) : (
+          <SmallText>Admin Proxy Pick hidden. Click “Show Admin Proxy Pick” when you need it.</SmallText>
+        )}
       </Card>
 
       <Card
