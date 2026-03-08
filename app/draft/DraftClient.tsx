@@ -11,7 +11,7 @@ type DraftState = {
   rounds_total: number;
   current_round: number;
   current_pick_in_round: number;
-  current_coach_id: number;
+  current_coach_id: number | null;
 };
 
 type Player = {
@@ -110,6 +110,9 @@ function pauseReasonLabel(pause_reason: string | null) {
   if (pause_reason.startsWith("WAIT_BLOCK_")) {
     const block = pause_reason.replace("WAIT_BLOCK_", "");
     return `Waiting for Admin to set draft order for rounds ${block}…`;
+  }
+  if (pause_reason === "Draft complete") {
+    return "Draft complete";
   }
   return "Paused";
 }
@@ -275,6 +278,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const [customOrderSaving, setCustomOrderSaving] = useState(false);
 
   const [turnPopupOpen, setTurnPopupOpen] = useState(false);
+  const [draftCompletePopupOpen, setDraftCompletePopupOpen] = useState(false);
 
   const skipKey = useMemo(() => `super8_skip_confirm:${room}:${coachId}`, [room, coachId]);
 
@@ -282,6 +286,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const timersRef = useRef<Record<string, any>>({});
   const prevIsMyTurnRef = useRef(false);
   const lastAlertedPickRef = useRef<string>("");
+  const prevDraftCompleteRef = useRef(false);
   const playersListRef = useRef<HTMLDivElement | null>(null);
 
   const canUseCustomSort = !isAdmin && coachId === 3;
@@ -585,6 +590,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     state.current_round <= MAX_ROUNDS &&
     state.current_coach_id === coachId;
 
+  const isDraftComplete = useMemo(() => {
+    if (!state) return false;
+    return (
+      state.is_paused &&
+      (state.pause_reason === "Draft complete" || state.current_round > MAX_ROUNDS)
+    );
+  }, [state]);
+
   useEffect(() => {
     const nowMyTurn = isMyTurn;
     const wasMyTurn = prevIsMyTurnRef.current;
@@ -603,6 +616,18 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     prevIsMyTurnRef.current = nowMyTurn;
   }, [isMyTurn, state, isAdmin]);
 
+  useEffect(() => {
+    const wasComplete = prevDraftCompleteRef.current;
+
+    if (!isAdmin && isDraftComplete && !wasComplete) {
+      setDraftCompletePopupOpen(true);
+      setTurnPopupOpen(false);
+      setConfirm({ open: false, player: null });
+    }
+
+    prevDraftCompleteRef.current = isDraftComplete;
+  }, [isDraftComplete, isAdmin]);
+
   function closeTurnPopup() {
     setTurnPopupOpen(false);
     if (playersListRef.current) {
@@ -610,13 +635,17 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     }
   }
 
+  function closeDraftCompletePopup() {
+    setDraftCompletePopupOpen(false);
+  }
+
   const topBar = useMemo(() => {
     if (!state) return `Super 8 Room • Draft not started yet`;
-    const live = state.is_paused ? "PAUSED" : "LIVE";
+    const live = isDraftComplete ? "COMPLETE" : state.is_paused ? "PAUSED" : "LIVE";
     const shownRound = Math.min(state.current_round, MAX_ROUNDS);
     const shownRoundsTotal = capRounds(state.rounds_total);
     return `Super 8 Room • Round ${shownRound}/${shownRoundsTotal} • Pick ${state.current_pick_in_round} • ${live}`;
-  }, [state]);
+  }, [state, isDraftComplete]);
 
   const tabIdx = useMemo(() => POS_TABS.indexOf(posTab), [posTab]);
 
@@ -844,6 +873,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
 
     setState(freshState);
 
+    if (
+      freshState.is_paused &&
+      (freshState.pause_reason === "Draft complete" || freshState.current_round > MAX_ROUNDS)
+    ) {
+      setDraftCompletePopupOpen(true);
+      return;
+    }
+
     if (freshState.current_round > MAX_ROUNDS) {
       alert("The draft is complete. No picks are available after round 46.");
       return;
@@ -855,7 +892,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     }
 
     if (freshState.current_coach_id !== coachId) {
-      const liveCoachName = coachNameById.get(freshState.current_coach_id) ?? `Coach ${freshState.current_coach_id}`;
+      const liveCoachName = coachNameById.get(freshState.current_coach_id ?? 0) ?? `Coach ${freshState.current_coach_id}`;
       alert(`Not your turn. It is currently ${liveCoachName}'s pick.`);
       return;
     }
@@ -883,12 +920,21 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     }
 
     const res = Array.isArray(data) ? data[0] : data;
+
+    if (res?.message === "draft complete") {
+      await refreshAll();
+      setConfirm({ open: false, player: null });
+      setBusy(false);
+      setDraftCompletePopupOpen(true);
+      return;
+    }
+
     if (!res?.ok) {
       const freshAfter = await fetchLatestState();
       if (freshAfter) setState(freshAfter);
 
       if (freshAfter && freshAfter.current_coach_id !== coachId) {
-        const liveCoachName = coachNameById.get(freshAfter.current_coach_id) ?? `Coach ${freshAfter.current_coach_id}`;
+        const liveCoachName = coachNameById.get(freshAfter.current_coach_id ?? 0) ?? `Coach ${freshAfter.current_coach_id}`;
         alert(`Draft failed: it is now ${liveCoachName}'s pick.`);
       } else {
         alert("Draft failed: " + (res?.message ?? "Unknown error"));
@@ -911,14 +957,22 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       alert("Draft not started yet (no draft_state row).");
       return;
     }
+
+    if (isDraftComplete) {
+      setDraftCompletePopupOpen(true);
+      return;
+    }
+
     if (state.current_round > MAX_ROUNDS) {
       alert("The draft is complete. No picks are available after round 46.");
       return;
     }
+
     if (state.is_paused) {
       alert(pauseReasonLabel(state.pause_reason) ?? "Draft is paused.");
       return;
     }
+
     if (!isMyTurn) {
       const liveCoachName = state.current_coach_id
         ? coachNameById.get(state.current_coach_id) ?? `Coach ${state.current_coach_id}`
@@ -926,6 +980,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       alert(`Not your turn. It is currently ${liveCoachName}'s pick.`);
       return;
     }
+
     if (busy) return;
 
     if (skipConfirm) {
@@ -1004,12 +1059,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
               <div
                 style={{
                   marginTop: 8,
-                  color: state?.is_paused ? "#b54708" : isMyTurn ? "#027a48" : textSoft,
+                  color: isDraftComplete ? "#344054" : state?.is_paused ? "#b54708" : isMyTurn ? "#027a48" : textSoft,
                   fontWeight: 900,
                   fontSize: 15,
                 }}
               >
-                {state?.current_round && state.current_round > MAX_ROUNDS
+                {isDraftComplete
+                  ? "Draft complete"
+                  : state?.current_round && state.current_round > MAX_ROUNDS
                   ? "Draft complete"
                   : state?.is_paused
                   ? pauseReasonLabel(state.pause_reason) ?? "Waiting (Admin hasn’t started the draft yet)…"
@@ -1498,6 +1555,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
               >
                 {filtered.map((p) => {
                   const disabled =
+                    isDraftComplete ||
                     !isMyTurn ||
                     busy ||
                     p.drafted_by_coach_id != null ||
@@ -1529,7 +1587,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                         opacity: disabled ? 0.78 : 1,
                         userSelect: "none",
                       }}
-                      title={disabled ? "Draft disabled (not your turn / paused / busy / already drafted)" : "Click to draft"}
+                      title={disabled ? "Draft disabled (not your turn / paused / busy / already drafted / draft complete)" : "Click to draft"}
                     >
                       <div style={{ color: availableText, minWidth: 0, flex: 1 }}>
                         <div style={{ fontSize: 15 }}>
@@ -1848,6 +1906,75 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 <button
                   type="button"
                   onClick={closeTurnPopup}
+                  style={{
+                    padding: "11px 14px",
+                    borderRadius: 12,
+                    border: "1px solid #111111",
+                    background: "#111111",
+                    color: "#ffffff",
+                    fontWeight: 1000,
+                    cursor: "pointer",
+                  }}
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {draftCompletePopupOpen && !isAdmin ? (
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.60)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 16,
+              zIndex: 1200,
+            }}
+          >
+            <div
+              style={{
+                width: "min(560px, 100%)",
+                borderRadius: 18,
+                background: "#ffffff",
+                border: "1px solid #e4e7ec",
+                boxShadow: "0 24px 70px rgba(0,0,0,0.28)",
+                padding: 18,
+              }}
+            >
+              <div style={{ fontWeight: 1000, fontSize: 26, color: textMain }}>Draft Complete</div>
+
+              <div style={{ marginTop: 10, fontSize: 15, color: textSoft, lineHeight: 1.6 }}>
+                All <strong style={{ color: textMain }}>46 rounds</strong> are finished.
+              </div>
+
+              <div
+                style={{
+                  marginTop: 14,
+                  padding: 14,
+                  borderRadius: 14,
+                  background: "#f8fafc",
+                  border: "1px solid #e4e7ec",
+                }}
+              >
+                <div style={{ fontWeight: 1000, fontSize: 17, color: textMain }}>
+                  Super 8 Room
+                </div>
+                <div style={{ marginTop: 6, fontSize: 14, color: textSoft }}>
+                  No further picks are available.
+                </div>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+                <button
+                  type="button"
+                  onClick={closeDraftCompletePopup}
                   style={{
                     padding: "11px 14px",
                     borderRadius: 12,
