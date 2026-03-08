@@ -111,7 +111,7 @@ function pauseReasonLabel(pause_reason: string | null) {
     const block = pause_reason.replace("WAIT_BLOCK_", "");
     return `Waiting for Admin to set draft order for rounds ${block}…`;
   }
-  return "Paused";
+  return pause_reason === "Draft complete" ? "Draft complete" : "Paused";
 }
 
 function splitPos(posRaw: string): string[] {
@@ -268,14 +268,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
 
   const [confirm, setConfirm] = useState<ConfirmState>({ open: false, player: null });
   const [dontAskAgain, setDontAskAgain] = useState(false);
-    const [skipConfirm, setSkipConfirm] = useState(false);
+  const [skipConfirm, setSkipConfirm] = useState(false);
 
   const [customOrder, setCustomOrder] = useState<number[]>([]);
   const [customOrderDirty, setCustomOrderDirty] = useState(false);
   const [customOrderSaving, setCustomOrderSaving] = useState(false);
 
   const skipKey = useMemo(() => `super8_skip_confirm:${room}:${coachId}`, [room, coachId]);
-  
+
   const pollTimerRef = useRef<number | null>(null);
   const timersRef = useRef<Record<string, any>>({});
   const prevIsMyTurnRef = useRef(false);
@@ -293,45 +293,45 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   }, [skipKey]);
 
   useEffect(() => {
-  let cancelled = false;
+    let cancelled = false;
 
-  async function run() {
-    if (!canUseCustomSort) {
-      setCustomOrder([]);
-      if (sortKey === "custom") setSortKey("player_no");
-      return;
-    }
-
-    try {
-      const saved = await loadCustomOrderFromSupabase(room, coachId);
-      if (cancelled) return;
-
-            const merged = mergeCustomOrder(saved, players);
-      const fallback = buildDefaultCustomOrder(players);
-      const next = merged.length > 0 ? merged : fallback;
-      setCustomOrder(next);
-      setCustomOrderDirty(false);
-
-      if (saved.length === 0 && next.length > 0) {
-        await saveCustomOrderToSupabase(room, coachId, next);
-        if (!cancelled) setCustomOrderDirty(false);
+    async function run() {
+      if (!canUseCustomSort) {
+        setCustomOrder([]);
+        if (sortKey === "custom") setSortKey("player_no");
+        return;
       }
-        } catch {
-      if (cancelled) return;
-      const fallback = buildDefaultCustomOrder(players);
-      setCustomOrder(fallback);
-      setCustomOrderDirty(false);
+
+      try {
+        const saved = await loadCustomOrderFromSupabase(room, coachId);
+        if (cancelled) return;
+
+        const merged = mergeCustomOrder(saved, players);
+        const fallback = buildDefaultCustomOrder(players);
+        const next = merged.length > 0 ? merged : fallback;
+        setCustomOrder(next);
+        setCustomOrderDirty(false);
+
+        if (saved.length === 0 && next.length > 0) {
+          await saveCustomOrderToSupabase(room, coachId, next);
+          if (!cancelled) setCustomOrderDirty(false);
+        }
+      } catch {
+        if (cancelled) return;
+        const fallback = buildDefaultCustomOrder(players);
+        setCustomOrder(fallback);
+        setCustomOrderDirty(false);
+      }
     }
-  }
 
-  void run();
+    void run();
 
-  return () => {
-    cancelled = true;
-  };
-}, [room, coachId, players.length, canUseCustomSort]);
+    return () => {
+      cancelled = true;
+    };
+  }, [room, coachId, players.length, canUseCustomSort, sortKey]);
 
-    function saveCustomOrder(nextOrder: number[]) {
+  function saveCustomOrder(nextOrder: number[]) {
     setCustomOrder(nextOrder);
     setCustomOrderDirty(true);
   }
@@ -607,6 +607,22 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     const shownRoundsTotal = capRounds(state.rounds_total);
     return `Super 8 Room • Round ${shownRound}/${shownRoundsTotal} • Pick ${state.current_pick_in_round} • ${live}`;
   }, [state]);
+
+  const statusText = useMemo(() => {
+    if (!state) return "Draft not started yet";
+    if (state.current_round > MAX_ROUNDS || state.pause_reason === "Draft complete") return "Draft complete";
+    if (state.is_paused) return pauseReasonLabel(state.pause_reason) ?? "Paused";
+    if (isMyTurn) return "You are ON THE CLOCK";
+    return "Waiting for your turn…";
+  }, [state, isMyTurn]);
+
+  const statusColor = useMemo(() => {
+    if (!state) return "#344054";
+    if (state.current_round > MAX_ROUNDS || state.pause_reason === "Draft complete") return "#344054";
+    if (state.is_paused) return "#b54708";
+    if (isMyTurn) return "#067647";
+    return "#344054";
+  }, [state, isMyTurn]);
 
   const tabIdx = useMemo(() => POS_TABS.indexOf(posTab), [posTab]);
 
@@ -974,40 +990,52 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const coachName = coachId ? coachNameById.get(coachId) ?? `Coach ${coachId}` : "No coach selected";
 
   return (
-    <div style={{ minHeight: "100vh", background: pageBg, padding: 16 }}>
+    <div
+      style={{
+        minHeight: isAdmin ? "auto" : "100vh",
+        background: pageBg,
+        padding: isAdmin ? 0 : 16,
+      }}
+    >
       <div style={{ maxWidth: 1440, margin: "0 auto" }}>
-        <div style={{ ...card, marginBottom: 12 }}>
+        <div style={{ ...card, marginBottom: isAdmin ? 8 : 12 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <div>
               <strong style={{ color: textMain, fontSize: 18 }}>{topBar}</strong>
 
-                            <div
+              <div
                 style={{
                   marginTop: 8,
-                  color: state?.is_paused ? "#b54708" : isMyTurn ? "#067647" : "#344054",
-                  fontWeight: 1000,
-                  fontSize: 16,
+                  padding: "8px 10px",
+                  borderRadius: 12,
+                  background: "#f8fafc",
+                  border: "1px solid #e4e7ec",
+                  fontSize: 13,
+                  color: textSoft,
+                  display: "flex",
+                  gap: 8,
+                  flexWrap: "wrap",
+                  alignItems: "center",
                 }}
               >
-                {state?.current_round && state.current_round > MAX_ROUNDS
-                  ? "Draft complete"
-                  : state?.is_paused
-                  ? pauseReasonLabel(state.pause_reason) ?? "Waiting (Admin hasn’t started the draft yet)…"
-                  : isMyTurn
-                  ? "You are ON THE CLOCK"
-                  : "Waiting for your turn…"}
-              </div>
-
-              <div style={{ marginTop: 8, fontSize: 13, color: textSoft }}>
-                Room: <strong style={{ color: textMain }}>Super 8 Room</strong> • Coach:{" "}
-                <strong style={{ color: textMain }}>{coachName}</strong>
-                {isAdmin ? <span style={{ marginLeft: 8 }}>• Admin view</span> : null}
+                <span>
+                  Room: <strong style={{ color: textMain }}>Super 8 Room</strong>
+                </span>
+                <span>•</span>
+                <span>
+                  Coach: <strong style={{ color: textMain }}>{coachName}</strong>
+                </span>
+                <span>•</span>
+                <span style={{ color: statusColor, fontWeight: 1000 }}>{statusText}</span>
+                {isAdmin ? <span style={{ marginLeft: 4, color: textSoft }}>• Admin view</span> : null}
               </div>
             </div>
 
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <a
                 href={`/board?room=${encodeURIComponent(room)}`}
+                target="_blank"
+                rel="noopener noreferrer"
                 style={{
                   padding: "11px 14px",
                   borderRadius: 12,
@@ -1021,29 +1049,31 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 Open Board
               </a>
 
-              <a
-                href={`/admin?room=${encodeURIComponent(room)}`}
-                style={{
-                  padding: "11px 14px",
-                  borderRadius: 12,
-                  border: "1px solid #111111",
-                  background: "#111111",
-                  fontWeight: 900,
-                  textDecoration: "none",
-                  color: "#ffffff",
-                }}
-              >
-                Admin
-              </a>
+              {!isAdmin ? (
+                <a
+                  href={`/admin?room=${encodeURIComponent(room)}`}
+                  style={{
+                    padding: "11px 14px",
+                    borderRadius: 12,
+                    border: "1px solid #111111",
+                    background: "#111111",
+                    fontWeight: 900,
+                    textDecoration: "none",
+                    color: "#ffffff",
+                  }}
+                >
+                  Admin
+                </a>
+              ) : null}
             </div>
           </div>
 
           {state && !state.is_paused && isMyTurn && state.current_round <= MAX_ROUNDS ? (
             <div
               style={{
-                marginTop: 14,
-                padding: "16px 18px",
-                borderRadius: 16,
+                marginTop: 10,
+                padding: "8px 12px",
+                borderRadius: 14,
                 border: "2px solid #111111",
                 background: "linear-gradient(90deg, #ffe08a, #fff6d6)",
                 display: "flex",
@@ -1053,10 +1083,10 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 flexWrap: "wrap",
               }}
             >
-              <div style={{ fontSize: 24, fontWeight: 1000, letterSpacing: 0.3, color: "#111111" }}>
+              <div style={{ fontSize: 16, fontWeight: 1000, letterSpacing: 0.2, color: "#111111" }}>
                 ⏱️ ON THE CLOCK
               </div>
-              <div style={{ fontWeight: 900, color: "#111111" }}>
+              <div style={{ fontWeight: 900, color: "#111111", fontSize: 14 }}>
                 Pick:{" "}
                 <span style={{ fontFamily: "monospace" }}>
                   {state.current_round}.{state.current_pick_in_round}
@@ -1084,7 +1114,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
           ) : null}
         </div>
 
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ marginBottom: isAdmin ? 8 : 12 }}>
           <div style={card}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
               <div style={{ fontWeight: 1000, color: textMain, fontSize: 18 }}>Mini Draft Board</div>
@@ -1149,7 +1179,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                             <div style={{ fontSize: 12, color: textSoft }}>Overall #{c.overall}</div>
 
                             {c.drafted ? (
-                                                            <div style={{ marginTop: 5, fontSize: 12 }}>
+                              <div style={{ marginTop: 5, fontSize: 12 }}>
                                 <strong style={{ color: textMain }}>{c.drafted.player_name}</strong>
                                 <div style={{ color: "#344054", fontWeight: 700 }}>
                                   #{c.drafted.player_no} • {c.drafted.pos} • {c.drafted.club}
@@ -1170,9 +1200,9 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
         </div>
 
         {isAdmin ? (
-          <div style={{ display: "grid", gap: 12 }}>
+          <div style={{ display: "grid", gap: 8 }}>
             <div style={card}>
-              <h2 style={{ marginTop: 0, color: textMain }}>Analytics</h2>
+              <h2 style={{ marginTop: 0, marginBottom: 12, color: textMain }}>Analytics</h2>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div style={chipStyle}>
@@ -1298,7 +1328,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search name / club / # / pos…"
-                                    style={{
+                  style={{
                     flex: 1,
                     minWidth: 220,
                     padding: "11px 13px",
@@ -1345,7 +1375,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   {hideDrafted ? "Available only" : "Show drafted"}
                 </button>
 
-                                {canUseCustomSort ? (
+                {canUseCustomSort ? (
                   <>
                     <button
                       type="button"
@@ -1386,7 +1416,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
               </div>
 
               <div
-                                style={{
+                style={{
                   display: "flex",
                   gap: 10,
                   fontSize: 12,
@@ -1449,7 +1479,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 </span>
               </div>
 
-                            {canUseCustomSort && sortKey === "custom" ? (
+              {canUseCustomSort && sortKey === "custom" ? (
                 <div
                   style={{
                     marginBottom: 10,
@@ -1457,7 +1487,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     borderRadius: 12,
                     background: "#111827",
                     border: "1px solid #475467",
-                                        color: "#f8fafc",
+                    color: "#f8fafc",
                     fontSize: 12,
                     lineHeight: 1.6,
                   }}
@@ -1474,7 +1504,12 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
 
               <div style={{ maxHeight: 560, overflowY: "auto", borderTop: "1px solid rgba(255,255,255,0.14)" }}>
                 {filtered.map((p) => {
-                  const disabled = !isMyTurn || busy || p.drafted_by_coach_id != null || !!state?.is_paused || (state?.current_round ?? 1) > MAX_ROUNDS;
+                  const disabled =
+                    !isMyTurn ||
+                    busy ||
+                    p.drafted_by_coach_id != null ||
+                    !!state?.is_paused ||
+                    (state?.current_round ?? 1) > MAX_ROUNDS;
 
                   return (
                     <div
@@ -1507,7 +1542,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                         <div style={{ fontSize: 15 }}>
                           <strong style={{ color: availableText }}>{p.player_no}</strong> — {p.player_name}
                         </div>
-                                                <div style={{ fontSize: 13, color: "#e2e8f0", marginTop: 2, fontWeight: 700 }}>
+                        <div style={{ fontSize: 13, color: "#e2e8f0", marginTop: 2, fontWeight: 700 }}>
                           {p.club} • {p.pos} • Avg {p.average}
                         </div>
                       </div>
@@ -1600,7 +1635,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 })}
 
                 {filtered.length === 0 ? (
-                                    <div style={{ padding: 12, color: "#f1f5f9", fontWeight: 700 }}>
+                  <div style={{ padding: 12, color: "#f1f5f9", fontWeight: 700 }}>
                     No players found for {POS_LABEL[posTab]}
                     {search ? ` with “${search}”` : ""}.
                   </div>
