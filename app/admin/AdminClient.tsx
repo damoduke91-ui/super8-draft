@@ -534,8 +534,17 @@ export default function AdminClient() {
     }
   }
 
-  const draftStatus = useMemo(() => {
+    const draftStatus = useMemo(() => {
     if (!draftState) return "No draft_state row yet";
+
+    const isComplete =
+      draftState.is_paused &&
+      (draftState.pause_reason === "Draft complete" || draftState.current_round > draftState.rounds_total);
+
+    if (isComplete) {
+      return `COMPLETE • 46 rounds finished`;
+    }
+
     const live = draftState.is_paused ? "PAUSED" : "LIVE";
     return `${live} • Round ${draftState.current_round}/${draftState.rounds_total} • Pick ${draftState.current_pick_in_round} • Coach ${draftState.current_coach_id}`;
   }, [draftState]);
@@ -1056,9 +1065,12 @@ export default function AdminClient() {
               Room: <strong>{ROOM_DISPLAY_NAME}</strong> • Status: <strong>{draftStatus}</strong>
             </SmallText>
 
-            {draftState?.is_paused ? (
+                        {draftState?.is_paused ? (
               <div style={{ marginTop: 8, fontSize: 12, opacity: 0.9 }}>
                 Reason: <strong>{pauseReasonLabel(draftState.pause_reason) ?? "Paused"}</strong>
+                {draftState.pause_reason === "Draft complete" ? (
+                  <span style={{ marginLeft: 8, fontWeight: 900 }}>• No more picks available</span>
+                ) : null}
               </div>
             ) : null}
 
