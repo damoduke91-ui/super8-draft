@@ -111,7 +111,7 @@ function pauseReasonLabel(pause_reason: string | null) {
     const block = pause_reason.replace("WAIT_BLOCK_", "");
     return `Waiting for Admin to set draft order for rounds ${block}…`;
   }
-  return pause_reason === "Draft complete" ? "Draft complete" : "Paused";
+  return "Paused";
 }
 
 function splitPos(posRaw: string): string[] {
@@ -274,12 +274,15 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const [customOrderDirty, setCustomOrderDirty] = useState(false);
   const [customOrderSaving, setCustomOrderSaving] = useState(false);
 
+  const [turnPopupOpen, setTurnPopupOpen] = useState(false);
+
   const skipKey = useMemo(() => `super8_skip_confirm:${room}:${coachId}`, [room, coachId]);
 
   const pollTimerRef = useRef<number | null>(null);
   const timersRef = useRef<Record<string, any>>({});
   const prevIsMyTurnRef = useRef(false);
   const lastAlertedPickRef = useRef<string>("");
+  const playersListRef = useRef<HTMLDivElement | null>(null);
 
   const canUseCustomSort = !isAdmin && coachId === 3;
 
@@ -470,25 +473,25 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     ch.on(
       "postgres_changes",
       { event: "*", schema: "public", table: "draft_state", filter: `room_id=eq.${room}` },
-      () => schedule("state", loadState, 120)
+      () => schedule("state", loadState, 100)
     );
 
     ch.on(
       "postgres_changes",
       { event: "*", schema: "public", table: "players", filter: `room_id=eq.${room}` },
-      () => schedule("players", loadPlayers, 180)
+      () => schedule("players", loadPlayers, 140)
     );
 
     ch.on(
       "postgres_changes",
       { event: "*", schema: "public", table: "coaches", filter: `room_id=eq.${room}` },
-      () => schedule("coaches", loadCoaches, 200)
+      () => schedule("coaches", loadCoaches, 160)
     );
 
     ch.on(
       "postgres_changes",
       { event: "*", schema: "public", table: "draft_order", filter: `room_id=eq.${room}` },
-      () => schedule("order", loadDraftOrder, 200)
+      () => schedule("order", loadDraftOrder, 160)
     );
 
     ch.subscribe();
@@ -500,7 +503,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
 
     pollTimerRef.current = window.setInterval(() => {
       void refreshAll();
-    }, 1000);
+    }, 500);
 
     return () => {
       supabase.removeChannel(ch);
@@ -592,13 +595,20 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
         lastAlertedPickRef.current = pickKey;
 
         if (!isAdmin) {
-          window.alert(`It is now your turn to pick.\n\nRound ${state.current_round} • Pick ${state.current_pick_in_round}`);
+          setTurnPopupOpen(true);
         }
       }
     }
 
     prevIsMyTurnRef.current = nowMyTurn;
   }, [isMyTurn, state, isAdmin]);
+
+  function closeTurnPopup() {
+    setTurnPopupOpen(false);
+    if (playersListRef.current) {
+      playersListRef.current.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
 
   const topBar = useMemo(() => {
     if (!state) return `Super 8 Room • Draft not started yet`;
@@ -607,22 +617,6 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     const shownRoundsTotal = capRounds(state.rounds_total);
     return `Super 8 Room • Round ${shownRound}/${shownRoundsTotal} • Pick ${state.current_pick_in_round} • ${live}`;
   }, [state]);
-
-  const statusText = useMemo(() => {
-    if (!state) return "Draft not started yet";
-    if (state.current_round > MAX_ROUNDS || state.pause_reason === "Draft complete") return "Draft complete";
-    if (state.is_paused) return pauseReasonLabel(state.pause_reason) ?? "Paused";
-    if (isMyTurn) return "You are ON THE CLOCK";
-    return "Waiting for your turn…";
-  }, [state, isMyTurn]);
-
-  const statusColor = useMemo(() => {
-    if (!state) return "#344054";
-    if (state.current_round > MAX_ROUNDS || state.pause_reason === "Draft complete") return "#344054";
-    if (state.is_paused) return "#b54708";
-    if (isMyTurn) return "#067647";
-    return "#344054";
-  }, [state, isMyTurn]);
 
   const tabIdx = useMemo(() => POS_TABS.indexOf(posTab), [posTab]);
 
@@ -762,6 +756,16 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
 
     return rows;
   }, [myPicks]);
+
+  const mainDraftSheetRows = useMemo(
+    () => myDraftSheet.filter((row) => row.slotLabel !== "MISC"),
+    [myDraftSheet]
+  );
+
+  const miscDraftSheetRows = useMemo(
+    () => myDraftSheet.filter((row) => row.slotLabel === "MISC"),
+    [myDraftSheet]
+  );
 
   const analytics = useMemo(() => {
     const total = players.length;
@@ -954,12 +958,12 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     await doDraft(p);
   }
 
-  const availablePanelBg = "#0f172a";
-  const availableText = "#ffffff";
+  const availablePanelBg = "#1f2937";
+  const availableText = bestTextColor(availablePanelBg);
 
   const pageBg = "#eef2f7";
-  const panelBorder = "#cbd5e1";
-  const textMain = "#0f172a";
+  const panelBorder = "#d0d5dd";
+  const textMain = "#101828";
   const textSoft = "#475467";
 
   const chipStyle: CSSProperties = {
@@ -990,15 +994,9 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const coachName = coachId ? coachNameById.get(coachId) ?? `Coach ${coachId}` : "No coach selected";
 
   return (
-    <div
-      style={{
-        minHeight: isAdmin ? "auto" : "100vh",
-        background: pageBg,
-        padding: isAdmin ? 0 : 16,
-      }}
-    >
+    <div style={{ minHeight: "100vh", background: pageBg, padding: 16 }}>
       <div style={{ maxWidth: 1440, margin: "0 auto" }}>
-        <div style={{ ...card, marginBottom: isAdmin ? 8 : 12 }}>
+        <div style={{ ...card, marginBottom: 12 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <div>
               <strong style={{ color: textMain, fontSize: 18 }}>{topBar}</strong>
@@ -1006,36 +1004,30 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
               <div
                 style={{
                   marginTop: 8,
-                  padding: "8px 10px",
-                  borderRadius: 12,
-                  background: "#f8fafc",
-                  border: "1px solid #e4e7ec",
-                  fontSize: 13,
-                  color: textSoft,
-                  display: "flex",
-                  gap: 8,
-                  flexWrap: "wrap",
-                  alignItems: "center",
+                  color: state?.is_paused ? "#b54708" : isMyTurn ? "#027a48" : textSoft,
+                  fontWeight: 900,
+                  fontSize: 15,
                 }}
               >
-                <span>
-                  Room: <strong style={{ color: textMain }}>Super 8 Room</strong>
-                </span>
-                <span>•</span>
-                <span>
-                  Coach: <strong style={{ color: textMain }}>{coachName}</strong>
-                </span>
-                <span>•</span>
-                <span style={{ color: statusColor, fontWeight: 1000 }}>{statusText}</span>
-                {isAdmin ? <span style={{ marginLeft: 4, color: textSoft }}>• Admin view</span> : null}
+                {state?.current_round && state.current_round > MAX_ROUNDS
+                  ? "Draft complete"
+                  : state?.is_paused
+                  ? pauseReasonLabel(state.pause_reason) ?? "Waiting (Admin hasn’t started the draft yet)…"
+                  : isMyTurn
+                  ? "You are ON THE CLOCK"
+                  : "Waiting for your turn…"}
+              </div>
+
+              <div style={{ marginTop: 8, fontSize: 13, color: textSoft }}>
+                Room: <strong style={{ color: textMain }}>Super 8 Room</strong> • Coach:{" "}
+                <strong style={{ color: textMain }}>{coachName}</strong>
+                {isAdmin ? <span style={{ marginLeft: 8 }}>• Admin view</span> : null}
               </div>
             </div>
 
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <a
                 href={`/board?room=${encodeURIComponent(room)}`}
-                target="_blank"
-                rel="noopener noreferrer"
                 style={{
                   padding: "11px 14px",
                   borderRadius: 12,
@@ -1049,31 +1041,29 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 Open Board
               </a>
 
-              {!isAdmin ? (
-                <a
-                  href={`/admin?room=${encodeURIComponent(room)}`}
-                  style={{
-                    padding: "11px 14px",
-                    borderRadius: 12,
-                    border: "1px solid #111111",
-                    background: "#111111",
-                    fontWeight: 900,
-                    textDecoration: "none",
-                    color: "#ffffff",
-                  }}
-                >
-                  Admin
-                </a>
-              ) : null}
+              <a
+                href={`/admin?room=${encodeURIComponent(room)}`}
+                style={{
+                  padding: "11px 14px",
+                  borderRadius: 12,
+                  border: "1px solid #111111",
+                  background: "#111111",
+                  fontWeight: 900,
+                  textDecoration: "none",
+                  color: "#ffffff",
+                }}
+              >
+                Admin
+              </a>
             </div>
           </div>
 
           {state && !state.is_paused && isMyTurn && state.current_round <= MAX_ROUNDS ? (
             <div
               style={{
-                marginTop: 10,
-                padding: "8px 12px",
-                borderRadius: 14,
+                marginTop: 14,
+                padding: "16px 18px",
+                borderRadius: 16,
                 border: "2px solid #111111",
                 background: "linear-gradient(90deg, #ffe08a, #fff6d6)",
                 display: "flex",
@@ -1083,10 +1073,10 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 flexWrap: "wrap",
               }}
             >
-              <div style={{ fontSize: 16, fontWeight: 1000, letterSpacing: 0.2, color: "#111111" }}>
+              <div style={{ fontSize: 24, fontWeight: 1000, letterSpacing: 0.3, color: "#111111" }}>
                 ⏱️ ON THE CLOCK
               </div>
-              <div style={{ fontWeight: 900, color: "#111111", fontSize: 14 }}>
+              <div style={{ fontWeight: 900, color: "#111111" }}>
                 Pick:{" "}
                 <span style={{ fontFamily: "monospace" }}>
                   {state.current_round}.{state.current_pick_in_round}
@@ -1114,7 +1104,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
           ) : null}
         </div>
 
-        <div style={{ marginBottom: isAdmin ? 8 : 12 }}>
+        <div style={{ marginBottom: 12 }}>
           <div style={card}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
               <div style={{ fontWeight: 1000, color: textMain, fontSize: 18 }}>Mini Draft Board</div>
@@ -1180,8 +1170,8 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
 
                             {c.drafted ? (
                               <div style={{ marginTop: 5, fontSize: 12 }}>
-                                <strong style={{ color: textMain }}>{c.drafted.player_name}</strong>
-                                <div style={{ color: "#344054", fontWeight: 700 }}>
+                                <strong>{c.drafted.player_name}</strong>
+                                <div style={{ color: textSoft }}>
                                   #{c.drafted.player_no} • {c.drafted.pos} • {c.drafted.club}
                                 </div>
                               </div>
@@ -1200,9 +1190,9 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
         </div>
 
         {isAdmin ? (
-          <div style={{ display: "grid", gap: 8 }}>
+          <div style={{ display: "grid", gap: 12 }}>
             <div style={card}>
-              <h2 style={{ marginTop: 0, marginBottom: 12, color: textMain }}>Analytics</h2>
+              <h2 style={{ marginTop: 0, color: textMain }}>Analytics</h2>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div style={chipStyle}>
@@ -1333,9 +1323,9 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     minWidth: 220,
                     padding: "11px 13px",
                     borderRadius: 12,
-                    border: "1px solid #64748b",
-                    background: "#0b1220",
-                    color: "#ffffff",
+                    border: "1px solid #475467",
+                    background: "#111827",
+                    color: availableText,
                     outline: "none",
                     fontWeight: 800,
                     fontSize: 14,
@@ -1421,7 +1411,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   gap: 10,
                   fontSize: 12,
                   marginBottom: 10,
-                  color: "#f8fafc",
+                  color: "#e5e7eb",
                   alignItems: "center",
                   flexWrap: "wrap",
                 }}
@@ -1487,9 +1477,9 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     borderRadius: 12,
                     background: "#111827",
                     border: "1px solid #475467",
-                    color: "#f8fafc",
+                    color: "#e5e7eb",
                     fontSize: 12,
-                    lineHeight: 1.6,
+                    lineHeight: 1.5,
                   }}
                 >
                   Coach 3 custom order is stored in <strong>Supabase</strong>. Use <strong>Top</strong>, <strong>↑</strong>, and{" "}
@@ -1502,7 +1492,10 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 </div>
               ) : null}
 
-              <div style={{ maxHeight: 560, overflowY: "auto", borderTop: "1px solid rgba(255,255,255,0.14)" }}>
+              <div
+                ref={playersListRef}
+                style={{ maxHeight: 560, overflowY: "auto", borderTop: "1px solid rgba(255,255,255,0.14)" }}
+              >
                 {filtered.map((p) => {
                   const disabled =
                     !isMyTurn ||
@@ -1542,7 +1535,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                         <div style={{ fontSize: 15 }}>
                           <strong style={{ color: availableText }}>{p.player_no}</strong> — {p.player_name}
                         </div>
-                        <div style={{ fontSize: 13, color: "#e2e8f0", marginTop: 2, fontWeight: 700 }}>
+                        <div style={{ fontSize: 13, color: "#d0d5dd", marginTop: 2 }}>
                           {p.club} • {p.pos} • Avg {p.average}
                         </div>
                       </div>
@@ -1635,7 +1628,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 })}
 
                 {filtered.length === 0 ? (
-                  <div style={{ padding: 12, color: "#f1f5f9", fontWeight: 700 }}>
+                  <div style={{ padding: 12, color: "#d0d5dd" }}>
                     No players found for {POS_LABEL[posTab]}
                     {search ? ` with “${search}”` : ""}.
                   </div>
@@ -1715,7 +1708,63 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     </thead>
 
                     <tbody>
-                      {myDraftSheet.map((s) => (
+                      {mainDraftSheetRows.map((s) => (
+                        <tr key={s.slotNo}>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>{s.slotNo}</td>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                            {s.displayPosition}
+                          </td>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                            {s.assigned ? s.assigned.player_no : ""}
+                          </td>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                            {s.assigned ? s.assigned.player_name : ""}
+                          </td>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                            {s.assigned ? s.assigned.club : ""}
+                          </td>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                            {s.assigned && s.assigned.drafted_round && s.assigned.drafted_pick
+                              ? `${s.assigned.drafted_round}.${s.assigned.drafted_pick}`
+                              : ""}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ marginTop: 18, fontWeight: 1000, color: textMain, fontSize: 15 }}>
+                  Miscellaneous
+                </div>
+
+                <div style={{ overflowX: "auto", marginTop: 8 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
+                          Slot #
+                        </th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
+                          Position
+                        </th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
+                          Player #
+                        </th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
+                          Player
+                        </th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
+                          Club
+                        </th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
+                          Pick #
+                        </th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {miscDraftSheetRows.map((s) => (
                         <tr key={s.slotNo}>
                           <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>{s.slotNo}</td>
                           <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
@@ -1746,6 +1795,75 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
             </div>
           </div>
         )}
+
+        {turnPopupOpen && !isAdmin && state ? (
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.60)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 16,
+              zIndex: 1100,
+            }}
+          >
+            <div
+              style={{
+                width: "min(520px, 100%)",
+                borderRadius: 18,
+                background: "#ffffff",
+                border: "1px solid #e4e7ec",
+                boxShadow: "0 24px 70px rgba(0,0,0,0.28)",
+                padding: 18,
+              }}
+            >
+              <div style={{ fontWeight: 1000, fontSize: 24, color: textMain }}>It is now your turn to pick</div>
+
+              <div style={{ marginTop: 8, fontSize: 15, color: textSoft, lineHeight: 1.5 }}>
+                <strong style={{ color: textMain }}>{coachName}</strong> is now on the clock.
+              </div>
+
+              <div
+                style={{
+                  marginTop: 14,
+                  padding: 14,
+                  borderRadius: 14,
+                  background: "#fff6d6",
+                  border: "1px solid #f5d267",
+                }}
+              >
+                <div style={{ fontWeight: 1000, fontSize: 18, color: "#111111" }}>
+                  Round {state.current_round} • Pick {state.current_pick_in_round}
+                </div>
+                <div style={{ marginTop: 6, fontSize: 14, color: "#6941c6" }}>
+                  Closing this will take you back to the top of the current player list.
+                </div>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+                <button
+                  type="button"
+                  onClick={closeTurnPopup}
+                  style={{
+                    padding: "11px 14px",
+                    borderRadius: 12,
+                    border: "1px solid #111111",
+                    background: "#111111",
+                    color: "#ffffff",
+                    fontWeight: 1000,
+                    cursor: "pointer",
+                  }}
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {!isAdmin && confirm.open && confirm.player ? (
           <div
