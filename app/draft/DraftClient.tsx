@@ -1086,19 +1086,21 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
 
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <a
-                href={`/board?room=${encodeURIComponent(room)}`}
-                style={{
-                  padding: "11px 14px",
-                  borderRadius: 12,
-                  border: "1px solid #111111",
-                  background: "#ffffff",
-                  fontWeight: 900,
-                  textDecoration: "none",
-                  color: "#111111",
-                }}
-              >
-                Open Draft Board
-              </a>
+  href={`/board?room=${encodeURIComponent(room)}`}
+  target="_blank"
+  rel="noopener noreferrer"
+  style={{
+    padding: "11px 14px",
+    borderRadius: 12,
+    border: "1px solid #111111",
+    background: "#ffffff",
+    fontWeight: 900,
+    textDecoration: "none",
+    color: "#111111",
+  }}
+>
+  Open Draft Board
+</a>
             </div>
           </div>
 
