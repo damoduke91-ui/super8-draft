@@ -138,6 +138,7 @@ export default function AdminClient() {
 
   const [showDebug, setShowDebug] = useState(false);
   const [showProxyPick, setShowProxyPick] = useState(false);
+  const [showLiveBoard, setShowLiveBoard] = useState(true);
 
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -1170,16 +1171,19 @@ export default function AdminClient() {
       </Card>
 
       <Card
-        title="Live Draft Board"
-        right={
-          <SmallText>
-            room: <strong>{ROOM_DISPLAY_NAME}</strong>
-            {anyBusy ? <span style={{ marginLeft: 8, opacity: 0.8 }}>• updating…</span> : null}
-          </SmallText>
-        }
-      >
-        <DraftClient key={`${roomId.trim()}-${refreshKey}`} />
-      </Card>
+  title="Live Draft Board"
+  right={
+    <Button onClick={() => setShowLiveBoard((v) => !v)}>
+      {showLiveBoard ? "Hide Live Draft Board" : "Show Live Draft Board"}
+    </Button>
+  }
+>
+  {showLiveBoard ? (
+    <DraftClient key={`${roomId.trim()}-${refreshKey}`} />
+  ) : (
+    <SmallText>Live Draft Board hidden.</SmallText>
+  )}
+</Card>
 
       <Card title="Manual Order Editor">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
