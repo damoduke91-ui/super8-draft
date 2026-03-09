@@ -1179,7 +1179,7 @@ export default function AdminClient() {
   }
 >
   {showLiveBoard ? (
-    <DraftClient key={`${roomId.trim()}-${refreshKey}`} />
+    <DraftClient key={roomId.trim()} />
   ) : (
     <SmallText>Live Draft Board hidden.</SmallText>
   )}
