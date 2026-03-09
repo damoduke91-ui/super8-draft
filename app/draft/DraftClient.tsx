@@ -892,7 +892,8 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     }
 
     if (freshState.current_coach_id !== coachId) {
-      const liveCoachName = coachNameById.get(freshState.current_coach_id ?? 0) ?? `Coach ${freshState.current_coach_id}`;
+      const liveCoachName =
+        coachNameById.get(freshState.current_coach_id ?? 0) ?? `Coach ${freshState.current_coach_id}`;
       alert(`Not your turn. It is currently ${liveCoachName}'s pick.`);
       return;
     }
@@ -934,7 +935,8 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       if (freshAfter) setState(freshAfter);
 
       if (freshAfter && freshAfter.current_coach_id !== coachId) {
-        const liveCoachName = coachNameById.get(freshAfter.current_coach_id ?? 0) ?? `Coach ${freshAfter.current_coach_id}`;
+        const liveCoachName =
+          coachNameById.get(freshAfter.current_coach_id ?? 0) ?? `Coach ${freshAfter.current_coach_id}`;
         alert(`Draft failed: it is now ${liveCoachName}'s pick.`);
       } else {
         alert("Draft failed: " + (res?.message ?? "Unknown error"));
@@ -1095,22 +1097,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   color: "#111111",
                 }}
               >
-                Open Board
-              </a>
-
-              <a
-                href={`/admin?room=${encodeURIComponent(room)}`}
-                style={{
-                  padding: "11px 14px",
-                  borderRadius: 12,
-                  border: "1px solid #111111",
-                  background: "#111111",
-                  fontWeight: 900,
-                  textDecoration: "none",
-                  color: "#ffffff",
-                }}
-              >
-                Admin
+                Open Draft Board
               </a>
             </div>
           </div>
