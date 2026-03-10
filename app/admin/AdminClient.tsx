@@ -111,6 +111,9 @@ export default function AdminClient() {
   const [lastPick, setLastPick] = useState<LastPickRow | null>(null);
   const [healthCheckedAt, setHealthCheckedAt] = useState<string>("");
 
+  const [fixBusy, setFixBusy] = useState(false);
+  const [fixMsg, setFixMsg] = useState("");
+
   async function loadDraftState(room: string) {
     setDraftStateErr("");
     if (!room.trim()) {
@@ -293,6 +296,42 @@ export default function AdminClient() {
       setDraftActionMsg(`Reset failed: ${e?.message || String(e)}`);
     } finally {
       setDraftActionBusy(false);
+    }
+  }
+
+  async function fixDraftState() {
+    setFixMsg("");
+    if (!roomId.trim()) return setFixMsg("Room id is required.");
+
+    const ok = window.confirm(
+      `Run Emergency Fix Draft State for room "${roomId.trim()}"?\n\nThis will recalculate the next round, pick and coach from drafted players + draft_order.`
+    );
+    if (!ok) return;
+
+    setFixBusy(true);
+    try {
+      const { res, json } = await postJson("/api/admin/fix-draft-state", {
+        roomId: roomId.trim(),
+      });
+
+      if (!res.ok || !json?.ok) {
+        setFixMsg(`Fix failed: ${json?.error || json?.message || "Unknown error"}`);
+      } else {
+        const summary =
+          json?.summary
+            ? `Round ${json.summary.current_round}, Pick ${json.summary.current_pick_in_round}, Coach ${json.summary.current_coach_id}`
+            : "Draft state repaired";
+
+        setFixMsg(`🛠️ Emergency fix applied — ${summary}`);
+        await loadDraftState(roomId.trim());
+        await loadData(roomId.trim());
+        await loadHealthMonitor(roomId.trim());
+        setRefreshKey((k) => k + 1);
+      }
+    } catch (e: any) {
+      setFixMsg(`Fix failed: ${e?.message || String(e)}`);
+    } finally {
+      setFixBusy(false);
     }
   }
 
@@ -696,7 +735,7 @@ export default function AdminClient() {
 
   const editorLocked = resetBusy || saveBusy;
 
-  const anyBusy = busy || saveBusy || resetBusy || draftActionBusy;
+  const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || fixBusy;
 
   const healthStatusText = useMemo(() => {
     if (!draftState) return "No draft_state row";
@@ -729,6 +768,7 @@ export default function AdminClient() {
             ) : null}
 
             {draftActionMsg ? <div style={{ marginTop: 8, fontWeight: 900 }}>{draftActionMsg}</div> : null}
+            {fixMsg ? <div style={{ marginTop: 8, fontWeight: 900 }}>{fixMsg}</div> : null}
           </div>
 
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -783,6 +823,24 @@ export default function AdminClient() {
               title="Reset the draft (depends on your /api/admin/reset-draft implementation)"
             >
               Reset draft
+            </button>
+
+            <button
+              type="button"
+              onClick={fixDraftState}
+              disabled={fixBusy || !roomId.trim()}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid #92400e",
+                background: fixBusy ? "#fcd34d" : "#fff7ed",
+                color: "#92400e",
+                fontWeight: 900,
+                cursor: fixBusy ? "not-allowed" : "pointer",
+              }}
+              title="Emergency repair of current round, pick and coach"
+            >
+              {fixBusy ? "Fixing..." : "Fix Draft State"}
             </button>
           </div>
         </div>
