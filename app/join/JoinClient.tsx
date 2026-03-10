@@ -130,7 +130,7 @@ export default function JoinClient() {
             <input
               value={coach}
               onChange={(e) => setCoach(e.target.value)}
-              placeholder="e.g. 3"
+              placeholder="e.g. 1"
               style={{
                 padding: "14px 14px",
                 borderRadius: 12,
