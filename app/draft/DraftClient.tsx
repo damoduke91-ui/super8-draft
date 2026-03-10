@@ -50,6 +50,7 @@ type DraftClientProps = {
 type PosTab = (typeof POS_TABS)[number];
 type SortKey = "player_no" | "player_name" | "club" | "average" | "custom";
 type SlotBucket = "KD" | "DEF" | "MID" | "FOR" | "KF" | "RUC" | "MISC";
+type PositionOrderKey = Exclude<PosTab, "ALL">;
 
 type DraftSheetRow = {
   slotNo: number;
@@ -58,9 +59,12 @@ type DraftSheetRow = {
   assigned: Player | null;
 };
 
+type PositionOrders = Record<PositionOrderKey, number[]>;
+
 const MAX_ROUNDS = 46;
 
 const POS_TABS = ["ALL", "KD", "DEF", "MID", "FOR", "KF", "RUC"] as const;
+const POSITION_ONLY_TABS = ["KD", "DEF", "MID", "FOR", "KF", "RUC"] as const;
 
 const POS_LABEL: Record<PosTab, string> = {
   ALL: "All",
@@ -208,6 +212,17 @@ function mergeCustomOrder(savedOrder: number[], players: Player[]) {
   return [...kept, ...missing];
 }
 
+function emptyPositionOrders(): PositionOrders {
+  return {
+    KD: [],
+    DEF: [],
+    MID: [],
+    FOR: [],
+    KF: [],
+    RUC: [],
+  };
+}
+
 async function loadCustomOrderFromSupabase(room: string, coachId: number) {
   const res = await fetch(
     `/api/coach/custom-order?roomId=${encodeURIComponent(room)}&coachId=${coachId}`,
@@ -222,6 +237,30 @@ async function loadCustomOrderFromSupabase(room: string, coachId: number) {
   }
 
   return Array.isArray(json.order) ? json.order.map((r: { player_no: number }) => r.player_no) : [];
+}
+
+async function loadCustomPositionOrdersFromSupabase(room: string, coachId: number): Promise<PositionOrders> {
+  const res = await fetch(
+    `/api/coach/custom-position-order?roomId=${encodeURIComponent(room)}&coachId=${coachId}`,
+    { cache: "no-store" }
+  );
+
+  const json = await res.json().catch(() => ({}));
+
+  if (!res.ok || !json?.ok || !json?.orders) {
+    return emptyPositionOrders();
+  }
+
+  const orders = json.orders as Partial<Record<PositionOrderKey, number[]>>;
+
+  return {
+    KD: Array.isArray(orders.KD) ? orders.KD : [],
+    DEF: Array.isArray(orders.DEF) ? orders.DEF : [],
+    MID: Array.isArray(orders.MID) ? orders.MID : [],
+    FOR: Array.isArray(orders.FOR) ? orders.FOR : [],
+    KF: Array.isArray(orders.KF) ? orders.KF : [],
+    RUC: Array.isArray(orders.RUC) ? orders.RUC : [],
+  };
 }
 
 async function saveCustomOrderToSupabase(room: string, coachId: number, order: number[]) {
@@ -305,6 +344,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const [customOrder, setCustomOrder] = useState<number[]>([]);
   const [customOrderDirty, setCustomOrderDirty] = useState(false);
   const [customOrderSaving, setCustomOrderSaving] = useState(false);
+  const [positionCustomOrders, setPositionCustomOrders] = useState<PositionOrders>(emptyPositionOrders());
 
   const [turnPopupOpen, setTurnPopupOpen] = useState(false);
   const [draftCompletePopupOpen, setDraftCompletePopupOpen] = useState(false);
@@ -320,6 +360,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const playersListRef = useRef<HTMLDivElement | null>(null);
 
   const canUseCustomSort = !isAdmin && Number.isFinite(coachId) && coachId > 0;
+  const isDamianCoach = !isAdmin && coachId === 3;
 
   useEffect(() => {
     try {
@@ -368,6 +409,30 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       cancelled = true;
     };
   }, [room, coachId, players.length, canUseCustomSort, sortKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function run() {
+      if (!isDamianCoach) {
+        setPositionCustomOrders(emptyPositionOrders());
+        return;
+      }
+
+      try {
+        const orders = await loadCustomPositionOrdersFromSupabase(room, coachId);
+        if (!cancelled) setPositionCustomOrders(orders);
+      } catch {
+        if (!cancelled) setPositionCustomOrders(emptyPositionOrders());
+      }
+    }
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [room, coachId, isDamianCoach, players.length]);
 
   useEffect(() => {
     if (isAdmin) return;
@@ -681,10 +746,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
 
   const isDraftComplete = useMemo(() => {
     if (!state) return false;
-    return (
-      state.is_paused &&
-      (state.pause_reason === "Draft complete" || state.current_round > MAX_ROUNDS)
-    );
+    return state.is_paused && (state.pause_reason === "Draft complete" || state.current_round > MAX_ROUNDS);
   }, [state]);
 
   useEffect(() => {
@@ -748,8 +810,19 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     setPosTab(POS_TABS[i]);
   }
 
+  const activeUploadedPositionOrder = useMemo(() => {
+    if (!isDamianCoach) return [];
+    if (posTab === "ALL") return [];
+    return positionCustomOrders[posTab];
+  }, [isDamianCoach, posTab, positionCustomOrders]);
+
+  const hasUploadedPositionOrder = activeUploadedPositionOrder.length > 0;
+  const isUsingSpreadsheetCustomForThisTab = isDamianCoach && sortKey === "custom" && posTab !== "ALL" && hasUploadedPositionOrder;
+
   function moveCustomPlayer(playerNo: number, direction: "up" | "down") {
     if (!canUseCustomSort) return;
+    if (isUsingSpreadsheetCustomForThisTab) return;
+
     const next = customOrder.slice();
     const idx = next.indexOf(playerNo);
     if (idx === -1) return;
@@ -764,6 +837,8 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
 
   function moveCustomPlayerToTop(playerNo: number) {
     if (!canUseCustomSort) return;
+    if (isUsingSpreadsheetCustomForThisTab) return;
+
     const next = customOrder.filter((n) => n !== playerNo);
     next.unshift(playerNo);
     saveCustomOrder(next);
@@ -782,6 +857,12 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     customOrder.forEach((playerNo, idx) => m.set(playerNo, idx));
     return m;
   }, [customOrder]);
+
+  const uploadedPositionRankByPlayerNo = useMemo(() => {
+    const m = new Map<number, number>();
+    activeUploadedPositionOrder.forEach((playerNo, idx) => m.set(playerNo, idx));
+    return m;
+  }, [activeUploadedPositionOrder]);
 
   const baseList = useMemo(() => {
     return hideDrafted ? players.filter((p) => p.drafted_by_coach_id == null) : players;
@@ -805,6 +886,13 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       const dir = sortDir === "asc" ? 1 : -1;
 
       if (sortKey === "custom") {
+        if (isUsingSpreadsheetCustomForThisTab) {
+          const aRank = uploadedPositionRankByPlayerNo.get(a.player_no) ?? Number.MAX_SAFE_INTEGER;
+          const bRank = uploadedPositionRankByPlayerNo.get(b.player_no) ?? Number.MAX_SAFE_INTEGER;
+          if (aRank !== bRank) return (aRank - bRank) * dir;
+          return (a.player_no - b.player_no) * dir;
+        }
+
         const aRank = customRankByPlayerNo.get(a.player_no) ?? Number.MAX_SAFE_INTEGER;
         const bRank = customRankByPlayerNo.get(b.player_no) ?? Number.MAX_SAFE_INTEGER;
         if (aRank !== bRank) return (aRank - bRank) * dir;
@@ -818,7 +906,16 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     });
 
     return list;
-  }, [baseList, posTab, search, sortKey, sortDir, customRankByPlayerNo]);
+  }, [
+    baseList,
+    posTab,
+    search,
+    sortKey,
+    sortDir,
+    customRankByPlayerNo,
+    uploadedPositionRankByPlayerNo,
+    isUsingSpreadsheetCustomForThisTab,
+  ]);
 
   const myPicks = useMemo(() => {
     return players
@@ -830,7 +927,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
           p.drafted_round <= MAX_ROUNDS
       )
       .slice()
-      .sort((a, b) => (a.drafted_round! - b.drafted_round!) || (a.drafted_pick! - b.drafted_pick!));
+      .sort((a, b) => (a.drafted_round! - b.drafted_round!) || a.drafted_pick! - b.drafted_pick!);
   }, [players, coachId]);
 
   const myDraftSheet = useMemo(() => {
@@ -862,8 +959,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     for (const p of myPicks) {
       const preferredBucket = getBucketForPlayer(p);
 
-      const targetSlotNo =
-        openSlotNosByBucket[preferredBucket].shift() ?? openSlotNosByBucket.MISC.shift();
+      const targetSlotNo = openSlotNosByBucket[preferredBucket].shift() ?? openSlotNosByBucket.MISC.shift();
 
       if (!targetSlotNo) continue;
 
@@ -875,15 +971,9 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     return rows;
   }, [myPicks]);
 
-  const mainDraftSheetRows = useMemo(
-    () => myDraftSheet.filter((row) => row.slotLabel !== "MISC"),
-    [myDraftSheet]
-  );
+  const mainDraftSheetRows = useMemo(() => myDraftSheet.filter((row) => row.slotLabel !== "MISC"), [myDraftSheet]);
 
-  const miscDraftSheetRows = useMemo(
-    () => myDraftSheet.filter((row) => row.slotLabel === "MISC"),
-    [myDraftSheet]
-  );
+  const miscDraftSheetRows = useMemo(() => myDraftSheet.filter((row) => row.slotLabel === "MISC"), [myDraftSheet]);
 
   const analytics = useMemo(() => {
     const total = players.length;
@@ -1244,9 +1334,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
           <div style={card}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
               <div style={{ fontWeight: 1000, color: textMain, fontSize: 15 }}>Mini Draft Board</div>
-              <div style={subtle}>
-                current + next round
-              </div>
+              <div style={subtle}>current + next round</div>
             </div>
 
             {!miniBoard ? (
@@ -1506,17 +1594,22 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     <button
                       type="button"
                       onClick={resetCustomOrder}
+                      disabled={isUsingSpreadsheetCustomForThisTab}
                       style={{
                         padding: "9px 11px",
                         borderRadius: 10,
                         border: "1px solid #475467",
-                        background: "#111827",
-                        color: availableText,
+                        background: isUsingSpreadsheetCustomForThisTab ? "#475467" : "#111827",
+                        color: isUsingSpreadsheetCustomForThisTab ? "#d0d5dd" : availableText,
                         fontWeight: 900,
-                        cursor: "pointer",
+                        cursor: isUsingSpreadsheetCustomForThisTab ? "not-allowed" : "pointer",
                         fontSize: 12,
                       }}
-                      title="Reset custom order back to player number order"
+                      title={
+                        isUsingSpreadsheetCustomForThisTab
+                          ? "This tab is controlled by Damian's uploaded spreadsheet"
+                          : "Reset custom order back to player number order"
+                      }
                     >
                       Reset Custom
                     </button>
@@ -1524,18 +1617,31 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     <button
                       type="button"
                       onClick={() => void saveCustomOrderNow()}
-                      disabled={!customOrderDirty || customOrderSaving}
+                      disabled={!customOrderDirty || customOrderSaving || isUsingSpreadsheetCustomForThisTab}
                       style={{
                         padding: "9px 11px",
                         borderRadius: 10,
                         border: "1px solid #475467",
-                        background: !customOrderDirty || customOrderSaving ? "#475467" : "#f9fafb",
-                        color: !customOrderDirty || customOrderSaving ? "#d0d5dd" : "#101828",
+                        background:
+                          !customOrderDirty || customOrderSaving || isUsingSpreadsheetCustomForThisTab
+                            ? "#475467"
+                            : "#f9fafb",
+                        color:
+                          !customOrderDirty || customOrderSaving || isUsingSpreadsheetCustomForThisTab
+                            ? "#d0d5dd"
+                            : "#101828",
                         fontWeight: 1000,
-                        cursor: !customOrderDirty || customOrderSaving ? "not-allowed" : "pointer",
+                        cursor:
+                          !customOrderDirty || customOrderSaving || isUsingSpreadsheetCustomForThisTab
+                            ? "not-allowed"
+                            : "pointer",
                         fontSize: 12,
                       }}
-                      title="Save custom order to Supabase"
+                      title={
+                        isUsingSpreadsheetCustomForThisTab
+                          ? "This tab is controlled by Damian's uploaded spreadsheet"
+                          : "Save custom order to Supabase"
+                      }
                     >
                       {customOrderSaving ? "Saving..." : "Save Custom"}
                     </button>
@@ -1622,12 +1728,21 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     lineHeight: 1.45,
                   }}
                 >
-                  Your custom order is stored in <strong>Supabase</strong>. Use <strong>Top</strong>, <strong>↑</strong>, and{" "}
-                  <strong>↓</strong> to pre-rank players, then click <strong>Save Custom</strong>.
-                  {customOrderDirty ? (
-                    <span style={{ marginLeft: 8, fontWeight: 1000, color: "#fde68a" }}>Unsaved changes</span>
+                  {isUsingSpreadsheetCustomForThisTab ? (
+                    <>
+                      Damian spreadsheet ranking is active for <strong>{posTab}</strong>. Re-upload the spreadsheet from{" "}
+                      <strong>Admin</strong> to change this tab’s custom order.
+                    </>
                   ) : (
-                    <span style={{ marginLeft: 8, fontWeight: 1000, color: "#86efac" }}>Saved</span>
+                    <>
+                      Your custom order is stored in <strong>Supabase</strong>. Use <strong>Top</strong>, <strong>↑</strong>, and{" "}
+                      <strong>↓</strong> to pre-rank players, then click <strong>Save Custom</strong>.
+                      {customOrderDirty ? (
+                        <span style={{ marginLeft: 8, fontWeight: 1000, color: "#fde68a" }}>Unsaved changes</span>
+                      ) : (
+                        <span style={{ marginLeft: 8, fontWeight: 1000, color: "#86efac" }}>Saved</span>
+                      )}
+                    </>
                   )}
                 </div>
               ) : null}
@@ -1682,7 +1797,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                       </div>
 
                       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                        {canUseCustomSort && sortKey === "custom" ? (
+                        {canUseCustomSort && sortKey === "custom" && !isUsingSpreadsheetCustomForThisTab ? (
                           <>
                             <button
                               type="button"
@@ -2019,9 +2134,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   border: "1px solid #e4e7ec",
                 }}
               >
-                <div style={{ fontWeight: 1000, fontSize: 17, color: textMain }}>
-                  Super 8 Room
-                </div>
+                <div style={{ fontWeight: 1000, fontSize: 17, color: textMain }}>Super 8 Room</div>
                 <div style={{ marginTop: 6, fontSize: 14, color: textSoft }}>
                   No further picks are available.
                 </div>

@@ -177,6 +177,11 @@ export default function AdminClient() {
   const [simStoppedForCoachId, setSimStoppedForCoachId] = useState<number | null>(null);
   const [simHasActiveSession, setSimHasActiveSession] = useState(false);
 
+  const [damianUploadFile, setDamianUploadFile] = useState<File | null>(null);
+  const [damianUploadMsg, setDamianUploadMsg] = useState("");
+  const [damianUploadBusy, setDamianUploadBusy] = useState(false);
+  const damianUploadInputRef = useRef<HTMLInputElement | null>(null);
+
   const autoResumeLockRef = useRef(false);
 
   const fieldBase: React.CSSProperties = {
@@ -240,7 +245,7 @@ export default function AdminClient() {
           setSimProgressLabel(`Processed ${count} picks so far...`);
         }
       } catch {
-        // ignore a single failed poll
+        // ignore
       }
     };
 
@@ -563,6 +568,69 @@ export default function AdminClient() {
       setDraftActionMsg(`Fix failed: ${e?.message || String(e)}`);
     } finally {
       setFixDraftBusy(false);
+    }
+  }
+
+  async function importDamianCustomRankings() {
+    setDamianUploadMsg("");
+
+    if (!roomId.trim()) {
+      setDamianUploadMsg("Room id is required.");
+      return;
+    }
+
+    if (!damianUploadFile) {
+      setDamianUploadMsg("Choose Damian’s XLSX file first.");
+      return;
+    }
+
+    const ok = window.confirm(
+      `Import Damian custom rankings for "${ROOM_DISPLAY_NAME}"?\n\nThis will overwrite Damian's uploaded KD / DEF / MID / FOR / KF / RUC rankings for this room.`
+    );
+    if (!ok) return;
+
+    setDamianUploadBusy(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("roomId", roomId.trim());
+      formData.append("file", damianUploadFile);
+
+      const res = await fetch("/api/admin/import-damian-custom-rankings", {
+        method: "POST",
+        body: formData,
+      });
+
+      const json = await res.json().catch(() => ({}));
+
+      if (!res.ok || !json?.ok) {
+        setDamianUploadMsg(`Import failed: ${json?.error || json?.message || "Unknown error"}`);
+        return;
+      }
+
+      const summary = json?.summary
+        ? Object.entries(json.summary)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join(" • ")
+        : "";
+
+      const warnings =
+        Array.isArray(json?.warnings) && json.warnings.length > 0
+          ? ` Warnings: ${json.warnings.length}.`
+          : "";
+
+      setDamianUploadMsg(
+        `✅ Damian rankings imported (${json?.importedCount ?? 0} rows). ${summary}${warnings}`
+      );
+
+      setDamianUploadFile(null);
+      if (damianUploadInputRef.current) {
+        damianUploadInputRef.current.value = "";
+      }
+    } catch (e: any) {
+      setDamianUploadMsg(`Import failed: ${e?.message || String(e)}`);
+    } finally {
+      setDamianUploadBusy(false);
     }
   }
 
@@ -1090,7 +1158,7 @@ export default function AdminClient() {
   }
 
   const editorLocked = resetBusy || saveBusy;
-  const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || fixDraftBusy || toolsBusy || proxyBusy;
+  const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || fixDraftBusy || toolsBusy || proxyBusy || damianUploadBusy;
 
   return (
     <Page title="Super8 Draft — Admin" subtitle="Draft control centre">
@@ -1710,6 +1778,66 @@ export default function AdminClient() {
           </div>
         }
       >
+        <div
+          style={{
+            display: "grid",
+            gap: 10,
+            maxWidth: 760,
+            padding: 12,
+            border: "1px solid #e5e7eb",
+            borderRadius: 12,
+            background: "#fff",
+            marginBottom: 12,
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 950 }}>Damian Custom Rankings Upload</div>
+            <SmallText>
+              Imports Damian’s spreadsheet tabs <strong>KD / DEF / MID / FOR / KF / RUC</strong> and overwrites Coach 3’s
+              uploaded position rankings for this room.
+            </SmallText>
+          </div>
+
+          <label>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Spreadsheet file</div>
+            <input
+              ref={damianUploadInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={(e) => setDamianUploadFile(e.target.files?.[0] ?? null)}
+              style={fieldBase}
+            />
+            <SmallText>
+              Expected columns on each position tab: <strong>Rank</strong>, <strong>No.</strong>, <strong>Player</strong>.
+            </SmallText>
+          </label>
+
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <Button variant="primary" onClick={importDamianCustomRankings} disabled={damianUploadBusy || !roomId.trim()}>
+              {damianUploadBusy ? "Importing..." : "Import Damian Rankings"}
+            </Button>
+
+            <Button
+              onClick={() => {
+                setDamianUploadFile(null);
+                setDamianUploadMsg("");
+                if (damianUploadInputRef.current) damianUploadInputRef.current.value = "";
+              }}
+              disabled={damianUploadBusy}
+            >
+              Clear file
+            </Button>
+
+            {damianUploadFile ? (
+              <SmallText>
+                Selected: <strong>{damianUploadFile.name}</strong>
+              </SmallText>
+            ) : null}
+          </div>
+
+          {damianUploadMsg ? <div style={{ fontWeight: 950 }}>{damianUploadMsg}</div> : null}
+        </div>
+
         {showDebug ? (
           <div style={{ display: "grid", gap: 12 }}>
             <div style={{ display: "grid", gap: 10 }}>
