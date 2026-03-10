@@ -242,6 +242,17 @@ async function saveCustomOrderToSupabase(room: string, coachId: number, order: n
   }
 }
 
+function getCoachSessionStorageKey(room: string, coachId: number) {
+  return `super8_coach_session:${room}:${coachId}`;
+}
+
+function createCoachSessionId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `session_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const pathname = usePathname();
   const isAdminRoute = pathname?.startsWith("/admin") ?? false;
@@ -283,6 +294,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const skipKey = useMemo(() => `super8_skip_confirm:${room}:${coachId}`, [room, coachId]);
 
   const pollTimerRef = useRef<number | null>(null);
+  const coachPresenceTimerRef = useRef<number | null>(null);
   const timersRef = useRef<Record<string, any>>({});
   const prevIsMyTurnRef = useRef(false);
   const lastAlertedPickRef = useRef<string>("");
@@ -338,6 +350,87 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
       cancelled = true;
     };
   }, [room, coachId, players.length, canUseCustomSort, sortKey]);
+
+  useEffect(() => {
+    if (isAdmin) return;
+    if (!room.trim()) return;
+    if (!Number.isFinite(coachId) || coachId <= 0) return;
+
+    const storageKey = getCoachSessionStorageKey(room, coachId);
+    let sessionId = "";
+
+    try {
+      const existing = sessionStorage.getItem(storageKey);
+      sessionId = existing || createCoachSessionId();
+      sessionStorage.setItem(storageKey, sessionId);
+    } catch {
+      sessionId = createCoachSessionId();
+    }
+
+    let cancelled = false;
+
+    async function markJoined() {
+      const { error } = await supabase
+        .from("coaches")
+        .update({ session_id: sessionId })
+        .eq("room_id", room)
+        .eq("coach_id", coachId);
+
+      if (error && !cancelled) {
+        console.error("coach session join update error:", error);
+      }
+    }
+
+    async function markLeft() {
+      const { data, error } = await supabase
+        .from("coaches")
+        .select("session_id")
+        .eq("room_id", room)
+        .eq("coach_id", coachId)
+        .maybeSingle();
+
+      if (error) {
+        console.error("coach session leave read error:", error);
+        return;
+      }
+
+      if ((data as { session_id?: string | null } | null)?.session_id !== sessionId) return;
+
+      const { error: clearError } = await supabase
+        .from("coaches")
+        .update({ session_id: null })
+        .eq("room_id", room)
+        .eq("coach_id", coachId);
+
+      if (clearError) {
+        console.error("coach session leave clear error:", clearError);
+      }
+    }
+
+    void markJoined();
+
+    coachPresenceTimerRef.current = window.setInterval(() => {
+      void markJoined();
+    }, 15000);
+
+    const handleBeforeUnload = () => {
+      void markLeft();
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      cancelled = true;
+
+      if (coachPresenceTimerRef.current != null) {
+        window.clearInterval(coachPresenceTimerRef.current);
+        coachPresenceTimerRef.current = null;
+      }
+
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      void markLeft();
+    };
+  }, [isAdmin, room, coachId]);
 
   function saveCustomOrder(nextOrder: number[]) {
     setCustomOrder(nextOrder);
