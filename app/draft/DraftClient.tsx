@@ -1026,44 +1026,44 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const chipStyle: CSSProperties = {
     display: "flex",
     justifyContent: "space-between",
-    gap: 10,
-    padding: "10px 12px",
+    gap: 8,
+    padding: "8px 10px",
     border: "1px solid #e4e7ec",
-    borderRadius: 12,
+    borderRadius: 10,
     background: "#f8fafc",
     fontWeight: 800,
-    fontSize: 13,
+    fontSize: 12,
     color: textMain,
   };
 
   const card: CSSProperties = {
     border: `1px solid ${panelBorder}`,
-    borderRadius: 16,
-    padding: 14,
+    borderRadius: 14,
+    padding: 10,
     background: "#ffffff",
-    boxShadow: "0 10px 30px rgba(16,24,40,0.06)",
+    boxShadow: "0 8px 24px rgba(16,24,40,0.05)",
   };
 
-  const subtle: CSSProperties = { fontSize: 12, color: textSoft };
+  const subtle: CSSProperties = { fontSize: 11, color: textSoft };
 
   const anyError = stateError || playersError || coachesError || draftOrderError;
 
   const coachName = coachId ? coachNameById.get(coachId) ?? `Coach ${coachId}` : "No coach selected";
 
   return (
-    <div style={{ minHeight: "100vh", background: pageBg, padding: 16 }}>
-      <div style={{ maxWidth: 1440, margin: "0 auto" }}>
-        <div style={{ ...card, marginBottom: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+    <div style={{ minHeight: "100vh", background: pageBg, padding: 10 }}>
+      <div style={{ maxWidth: 1500, margin: "0 auto" }}>
+        <div style={{ ...card, marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <div>
-              <strong style={{ color: textMain, fontSize: 18 }}>{topBar}</strong>
+              <strong style={{ color: textMain, fontSize: 15 }}>{topBar}</strong>
 
               <div
                 style={{
-                  marginTop: 8,
+                  marginTop: 4,
                   color: isDraftComplete ? "#344054" : state?.is_paused ? "#b54708" : isMyTurn ? "#027a48" : textSoft,
                   fontWeight: 900,
-                  fontSize: 15,
+                  fontSize: 13,
                 }}
               >
                 {isDraftComplete
@@ -1077,52 +1077,53 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   : "Waiting for your turn…"}
               </div>
 
-              <div style={{ marginTop: 8, fontSize: 13, color: textSoft }}>
+              <div style={{ marginTop: 4, fontSize: 12, color: textSoft }}>
                 Room: <strong style={{ color: textMain }}>Super 8 Room</strong> • Coach:{" "}
                 <strong style={{ color: textMain }}>{coachName}</strong>
                 {isAdmin ? <span style={{ marginLeft: 8 }}>• Admin view</span> : null}
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <a
-  href={`/board?room=${encodeURIComponent(room)}`}
-  target="_blank"
-  rel="noopener noreferrer"
-  style={{
-    padding: "11px 14px",
-    borderRadius: 12,
-    border: "1px solid #111111",
-    background: "#ffffff",
-    fontWeight: 900,
-    textDecoration: "none",
-    color: "#111111",
-  }}
->
-  Open Draft Board
-</a>
+                href={`/board?room=${encodeURIComponent(room)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  padding: "8px 11px",
+                  borderRadius: 10,
+                  border: "1px solid #111111",
+                  background: "#ffffff",
+                  fontWeight: 900,
+                  textDecoration: "none",
+                  color: "#111111",
+                  fontSize: 12,
+                }}
+              >
+                Open Draft Board
+              </a>
             </div>
           </div>
 
           {state && !state.is_paused && isMyTurn && state.current_round <= MAX_ROUNDS ? (
             <div
               style={{
-                marginTop: 14,
-                padding: "16px 18px",
-                borderRadius: 16,
+                marginTop: 8,
+                padding: "10px 12px",
+                borderRadius: 12,
                 border: "2px solid #111111",
                 background: "linear-gradient(90deg, #ffe08a, #fff6d6)",
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                gap: 12,
+                gap: 10,
                 flexWrap: "wrap",
               }}
             >
-              <div style={{ fontSize: 24, fontWeight: 1000, letterSpacing: 0.3, color: "#111111" }}>
+              <div style={{ fontSize: 18, fontWeight: 1000, letterSpacing: 0.2, color: "#111111" }}>
                 ⏱️ ON THE CLOCK
               </div>
-              <div style={{ fontWeight: 900, color: "#111111" }}>
+              <div style={{ fontWeight: 900, color: "#111111", fontSize: 13 }}>
                 Pick:{" "}
                 <span style={{ fontFamily: "monospace" }}>
                   {state.current_round}.{state.current_pick_in_round}
@@ -1134,14 +1135,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
           {anyError ? (
             <div
               style={{
-                marginTop: 12,
-                padding: 12,
-                borderRadius: 14,
+                marginTop: 8,
+                padding: 10,
+                borderRadius: 12,
                 border: "1px solid #fecdca",
                 background: "#fef3f2",
                 color: "#b42318",
                 fontWeight: 800,
-                fontSize: 13,
+                fontSize: 12,
                 whiteSpace: "pre-wrap",
               }}
             >
@@ -1150,34 +1151,33 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
           ) : null}
         </div>
 
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ marginBottom: 8 }}>
           <div style={card}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-              <div style={{ fontWeight: 1000, color: textMain, fontSize: 18 }}>Mini Draft Board</div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ fontWeight: 1000, color: textMain, fontSize: 15 }}>Mini Draft Board</div>
               <div style={subtle}>
-                Showing: <strong style={{ color: textMain }}>current</strong> +{" "}
-                <strong style={{ color: textMain }}>next</strong> round
+                current + next round
               </div>
             </div>
 
             {!miniBoard ? (
-              <div style={{ marginTop: 10, color: textSoft }}>
+              <div style={{ marginTop: 8, color: textSoft, fontSize: 12 }}>
                 Waiting for draft data… (need coaches + draft_order + rounds_total)
               </div>
             ) : (
-              <div style={{ marginTop: 10, overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <div style={{ marginTop: 8, overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <thead>
                     <tr>
-                      <th style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e4e7ec", color: textMain }}>
+                      <th style={{ textAlign: "left", padding: "7px 8px", borderBottom: "1px solid #e4e7ec", color: textMain }}>
                         Round
                       </th>
                       {Array.from({ length: nCoaches || 0 }, (_, i) => (
                         <th
                           key={i}
-                          style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e4e7ec", color: textMain }}
+                          style={{ textAlign: "left", padding: "7px 8px", borderBottom: "1px solid #e4e7ec", color: textMain }}
                         >
-                          Pick {i + 1}
+                          P{i + 1}
                         </th>
                       ))}
                     </tr>
@@ -1188,10 +1188,11 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                       <tr key={r.round}>
                         <td
                           style={{
-                            padding: 10,
+                            padding: "7px 8px",
                             borderBottom: "1px solid #f2f4f7",
                             fontWeight: 1000,
                             color: textMain,
+                            whiteSpace: "nowrap",
                           }}
                         >
                           {r.round} <span style={{ color: textSoft }}>{r.direction}</span>
@@ -1201,28 +1202,25 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                           <td
                             key={c.overall}
                             style={{
-                              padding: 10,
+                              padding: "7px 8px",
                               borderBottom: "1px solid #f2f4f7",
                               background: c.isCurrent ? "#fff6d6" : undefined,
                               outline: c.isCurrent ? "2px solid #d3a200" : "1px solid transparent",
                               verticalAlign: "top",
-                              minWidth: 170,
+                              minWidth: 120,
                               color: textMain,
                             }}
                             title={`Overall #${c.overall} • ${c.coach_name}`}
                           >
-                            <div style={{ fontWeight: 1000 }}>{c.coach_name}</div>
-                            <div style={{ fontSize: 12, color: textSoft }}>Overall #{c.overall}</div>
+                            <div style={{ fontWeight: 1000, fontSize: 12, lineHeight: 1.2 }}>{c.coach_name}</div>
+                            <div style={{ fontSize: 11, color: textSoft }}>#{c.overall}</div>
 
                             {c.drafted ? (
-                              <div style={{ marginTop: 5, fontSize: 12 }}>
+                              <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.25 }}>
                                 <strong>{c.drafted.player_name}</strong>
-                                <div style={{ color: textSoft }}>
-                                  #{c.drafted.player_no} • {c.drafted.pos} • {c.drafted.club}
-                                </div>
                               </div>
                             ) : (
-                              <div style={{ marginTop: 5, fontSize: 12, color: "#98a2b3" }}>—</div>
+                              <div style={{ marginTop: 3, fontSize: 11, color: "#98a2b3" }}>—</div>
                             )}
                           </td>
                         ))}
@@ -1236,11 +1234,11 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
         </div>
 
         {isAdmin ? (
-          <div style={{ display: "grid", gap: 12 }}>
+          <div style={{ display: "grid", gap: 8 }}>
             <div style={card}>
-              <h2 style={{ marginTop: 0, color: textMain }}>Analytics</h2>
+              <h2 style={{ marginTop: 0, marginBottom: 8, color: textMain, fontSize: 16 }}>Analytics</h2>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 <div style={chipStyle}>
                   <span>Total</span>
                   <span>{analytics.total}</span>
@@ -1259,11 +1257,11 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 </div>
               </div>
 
-              <div style={{ marginTop: 12, fontWeight: 1000, fontSize: 13, color: textSoft }}>
+              <div style={{ marginTop: 10, fontWeight: 1000, fontSize: 12, color: textSoft }}>
                 Position counts (Available / Total)
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
                 {(["KD", "DEF", "MID", "FOR", "KF", "RUC"] as const).map((tag) => (
                   <div key={tag} style={chipStyle}>
                     <span>{tag}</span>
@@ -1274,33 +1272,33 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 ))}
               </div>
 
-              <div style={{ marginTop: 10, fontSize: 12, color: textSoft }}>
+              <div style={{ marginTop: 8, fontSize: 11, color: textSoft }}>
                 Note: counts use your actual <code>pos</code> tags (supports dual like MID/FOR).
               </div>
             </div>
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 0.9fr)", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.35fr) minmax(320px, 0.75fr)", gap: 8, alignItems: "start" }}>
             <div
               style={{
                 border: `1px solid ${panelBorder}`,
-                padding: 14,
+                padding: 10,
                 background: availablePanelBg,
                 color: availableText,
-                borderRadius: 16,
-                boxShadow: "0 10px 30px rgba(16,24,40,0.08)",
+                borderRadius: 14,
+                boxShadow: "0 8px 24px rgba(16,24,40,0.06)",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                <h2 style={{ marginTop: 0, marginBottom: 0, color: availableText, fontSize: 22 }}>Players</h2>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <h2 style={{ marginTop: 0, marginBottom: 0, color: availableText, fontSize: 18 }}>Players</h2>
 
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                   <button
                     type="button"
                     onClick={prevTab}
                     style={{
-                      padding: "9px 13px",
-                      borderRadius: 10,
+                      padding: "7px 10px",
+                      borderRadius: 9,
                       border: "1px solid #475467",
                       background: "#111827",
                       color: availableText,
@@ -1316,8 +1314,8 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     type="button"
                     onClick={nextTab}
                     style={{
-                      padding: "9px 13px",
-                      borderRadius: 10,
+                      padding: "7px 10px",
+                      borderRadius: 9,
                       border: "1px solid #475467",
                       background: "#111827",
                       color: availableText,
@@ -1331,7 +1329,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 </div>
               </div>
 
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12, marginBottom: 12 }}>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8, marginBottom: 8 }}>
                 {POS_TABS.map((k) => {
                   const active = posTab === k;
                   const bg = active ? "#f9fafb" : "#111827";
@@ -1341,14 +1339,15 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     <button
                       key={k}
                       style={{
-                        padding: "9px 15px",
+                        padding: "7px 11px",
                         border: active ? "1px solid #f9fafb" : "1px solid #475467",
-                        borderRadius: 10,
+                        borderRadius: 9,
                         cursor: "pointer",
                         fontWeight: 900,
                         background: bg,
                         color: fg,
                         boxShadow: active ? "0 0 0 2px rgba(255,255,255,0.18)" : "none",
+                        fontSize: 12,
                       }}
                       onClick={() => setPosTab(k)}
                       type="button"
@@ -1359,22 +1358,22 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 })}
               </div>
 
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
                 <input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search name / club / # / pos…"
                   style={{
                     flex: 1,
-                    minWidth: 220,
-                    padding: "11px 13px",
-                    borderRadius: 12,
+                    minWidth: 200,
+                    padding: "9px 11px",
+                    borderRadius: 10,
                     border: "1px solid #475467",
                     background: "#111827",
                     color: availableText,
                     outline: "none",
                     fontWeight: 800,
-                    fontSize: 14,
+                    fontSize: 13,
                   }}
                 />
 
@@ -1382,13 +1381,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   type="button"
                   onClick={() => setSearch("")}
                   style={{
-                    padding: "11px 13px",
-                    borderRadius: 12,
+                    padding: "9px 11px",
+                    borderRadius: 10,
                     border: "1px solid #475467",
                     background: "#111827",
                     color: availableText,
                     fontWeight: 900,
                     cursor: "pointer",
+                    fontSize: 12,
                   }}
                 >
                   Clear
@@ -1398,13 +1398,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   type="button"
                   onClick={() => setHideDrafted((v) => !v)}
                   style={{
-                    padding: "11px 13px",
-                    borderRadius: 12,
+                    padding: "9px 11px",
+                    borderRadius: 10,
                     border: "1px solid #475467",
                     background: hideDrafted ? "#f9fafb" : "#111827",
                     color: hideDrafted ? "#101828" : availableText,
                     fontWeight: 1000,
                     cursor: "pointer",
+                    fontSize: 12,
                   }}
                   title="Toggle drafted players visibility"
                 >
@@ -1417,13 +1418,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                       type="button"
                       onClick={resetCustomOrder}
                       style={{
-                        padding: "11px 13px",
-                        borderRadius: 12,
+                        padding: "9px 11px",
+                        borderRadius: 10,
                         border: "1px solid #475467",
                         background: "#111827",
                         color: availableText,
                         fontWeight: 900,
                         cursor: "pointer",
+                        fontSize: 12,
                       }}
                       title="Reset custom order back to player number order"
                     >
@@ -1435,13 +1437,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                       onClick={() => void saveCustomOrderNow()}
                       disabled={!customOrderDirty || customOrderSaving}
                       style={{
-                        padding: "11px 13px",
-                        borderRadius: 12,
+                        padding: "9px 11px",
+                        borderRadius: 10,
                         border: "1px solid #475467",
                         background: !customOrderDirty || customOrderSaving ? "#475467" : "#f9fafb",
                         color: !customOrderDirty || customOrderSaving ? "#d0d5dd" : "#101828",
                         fontWeight: 1000,
                         cursor: !customOrderDirty || customOrderSaving ? "not-allowed" : "pointer",
+                        fontSize: 12,
                       }}
                       title="Save custom order to Supabase"
                     >
@@ -1454,9 +1457,9 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
               <div
                 style={{
                   display: "flex",
-                  gap: 10,
-                  fontSize: 12,
-                  marginBottom: 10,
+                  gap: 8,
+                  fontSize: 11,
+                  marginBottom: 8,
                   color: "#e5e7eb",
                   alignItems: "center",
                   flexWrap: "wrap",
@@ -1477,13 +1480,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                       type="button"
                       onClick={() => toggleSort(key as SortKey)}
                       style={{
-                        padding: "6px 10px",
+                        padding: "5px 9px",
                         borderRadius: 999,
                         border: active ? "1px solid #ffffff" : "1px solid #475467",
                         background: active ? "#f9fafb" : "#111827",
                         color: active ? "#101828" : "#ffffff",
                         fontWeight: 900,
                         cursor: "pointer",
+                        fontSize: 11,
                       }}
                     >
                       {label}
@@ -1496,13 +1500,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     type="button"
                     onClick={() => toggleSort("custom")}
                     style={{
-                      padding: "6px 10px",
+                      padding: "5px 9px",
                       borderRadius: 999,
                       border: sortKey === "custom" ? "1px solid #ffffff" : "1px solid #475467",
                       background: sortKey === "custom" ? "#f9fafb" : "#111827",
                       color: sortKey === "custom" ? "#101828" : "#ffffff",
                       fontWeight: 900,
                       cursor: "pointer",
+                      fontSize: 11,
                     }}
                     title="Coach 3 custom order"
                   >
@@ -1518,14 +1523,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
               {canUseCustomSort && sortKey === "custom" ? (
                 <div
                   style={{
-                    marginBottom: 10,
-                    padding: "10px 12px",
-                    borderRadius: 12,
+                    marginBottom: 8,
+                    padding: "8px 10px",
+                    borderRadius: 10,
                     background: "#111827",
                     border: "1px solid #475467",
                     color: "#e5e7eb",
-                    fontSize: 12,
-                    lineHeight: 1.5,
+                    fontSize: 11,
+                    lineHeight: 1.45,
                   }}
                 >
                   Coach 3 custom order is stored in <strong>Supabase</strong>. Use <strong>Top</strong>, <strong>↑</strong>, and{" "}
@@ -1540,7 +1545,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
 
               <div
                 ref={playersListRef}
-                style={{ maxHeight: 560, overflowY: "auto", borderTop: "1px solid rgba(255,255,255,0.14)" }}
+                style={{ maxHeight: "calc(100vh - 300px)", minHeight: 520, overflowY: "auto", borderTop: "1px solid rgba(255,255,255,0.14)" }}
               >
                 {filtered.map((p) => {
                   const disabled =
@@ -1566,12 +1571,12 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                         }
                       }}
                       style={{
-                        padding: 12,
+                        padding: "9px 10px",
                         borderBottom: "1px solid rgba(255,255,255,0.08)",
                         display: "flex",
                         justifyContent: "space-between",
                         alignItems: "center",
-                        gap: 10,
+                        gap: 8,
                         cursor: disabled ? "not-allowed" : "pointer",
                         opacity: disabled ? 0.78 : 1,
                         userSelect: "none",
@@ -1579,15 +1584,15 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                       title={disabled ? "Draft disabled (not your turn / paused / busy / already drafted / draft complete)" : "Click to draft"}
                     >
                       <div style={{ color: availableText, minWidth: 0, flex: 1 }}>
-                        <div style={{ fontSize: 15 }}>
+                        <div style={{ fontSize: 14, lineHeight: 1.2 }}>
                           <strong style={{ color: availableText }}>{p.player_no}</strong> — {p.player_name}
                         </div>
-                        <div style={{ fontSize: 13, color: "#d0d5dd", marginTop: 2 }}>
+                        <div style={{ fontSize: 12, color: "#d0d5dd", marginTop: 1 }}>
                           {p.club} • {p.pos} • Avg {p.average}
                         </div>
                       </div>
 
-                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                         {canUseCustomSort && sortKey === "custom" ? (
                           <>
                             <button
@@ -1597,13 +1602,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                                 moveCustomPlayerToTop(p.player_no);
                               }}
                               style={{
-                                padding: "8px 10px",
-                                borderRadius: 10,
+                                padding: "6px 8px",
+                                borderRadius: 8,
                                 border: "1px solid #d0d5dd",
                                 background: "#ffffff",
                                 color: "#111111",
                                 fontWeight: 900,
                                 cursor: "pointer",
+                                fontSize: 11,
                               }}
                             >
                               Top
@@ -1616,13 +1622,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                                 moveCustomPlayer(p.player_no, "up");
                               }}
                               style={{
-                                padding: "8px 10px",
-                                borderRadius: 10,
+                                padding: "6px 8px",
+                                borderRadius: 8,
                                 border: "1px solid #d0d5dd",
                                 background: "#ffffff",
                                 color: "#111111",
                                 fontWeight: 900,
                                 cursor: "pointer",
+                                fontSize: 11,
                               }}
                             >
                               ↑
@@ -1635,13 +1642,14 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                                 moveCustomPlayer(p.player_no, "down");
                               }}
                               style={{
-                                padding: "8px 10px",
-                                borderRadius: 10,
+                                padding: "6px 8px",
+                                borderRadius: 8,
                                 border: "1px solid #d0d5dd",
                                 background: "#ffffff",
                                 color: "#111111",
                                 fontWeight: 900,
                                 cursor: "pointer",
+                                fontSize: 11,
                               }}
                             >
                               ↓
@@ -1656,14 +1664,15 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                             if (!disabled) requestDraft(p);
                           }}
                           style={{
-                            padding: "9px 13px",
-                            borderRadius: 10,
+                            padding: "7px 10px",
+                            borderRadius: 8,
                             border: "1px solid #d0d5dd",
                             cursor: disabled ? "not-allowed" : "pointer",
                             background: disabled ? "#98a2b3" : "#ffffff",
                             color: disabled ? "#344054" : "#111111",
                             fontWeight: 900,
                             whiteSpace: "nowrap",
+                            fontSize: 12,
                           }}
                           type="button"
                         >
@@ -1675,7 +1684,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                 })}
 
                 {filtered.length === 0 ? (
-                  <div style={{ padding: 12, color: "#d0d5dd" }}>
+                  <div style={{ padding: 10, color: "#d0d5dd", fontSize: 12 }}>
                     No players found for {POS_LABEL[posTab]}
                     {search ? ` with “${search}”` : ""}.
                   </div>
@@ -1683,11 +1692,11 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
               </div>
             </div>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, position: "sticky", top: 10, alignSelf: "start" }}>
               <div style={card}>
-                <h2 style={{ marginTop: 0, color: textMain }}>Analytics</h2>
+                <h2 style={{ marginTop: 0, marginBottom: 8, color: textMain, fontSize: 15 }}>Analytics</h2>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                   <div style={chipStyle}>
                     <span>Total</span>
                     <span>{analytics.total}</span>
@@ -1706,11 +1715,11 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   </div>
                 </div>
 
-                <div style={{ marginTop: 12, fontWeight: 1000, fontSize: 13, color: textSoft }}>
-                  Position counts (Available / Total)
+                <div style={{ marginTop: 10, fontWeight: 1000, fontSize: 12, color: textSoft }}>
+                  Position counts
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
                   {(["KD", "DEF", "MID", "FOR", "KF", "RUC"] as const).map((tag) => (
                     <div key={tag} style={chipStyle}>
                       <span>{tag}</span>
@@ -1720,36 +1729,32 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     </div>
                   ))}
                 </div>
-
-                <div style={{ marginTop: 10, fontSize: 12, color: textSoft }}>
-                  Note: counts use your actual <code>pos</code> tags (supports dual like MID/FOR).
-                </div>
               </div>
 
               <div style={card}>
-                <h2 style={{ marginTop: 0, color: textMain }}>My Draft Sheet</h2>
+                <h2 style={{ marginTop: 0, marginBottom: 8, color: textMain, fontSize: 15 }}>My Draft Sheet</h2>
 
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <div style={{ maxHeight: "calc(100vh - 230px)", overflowY: "auto", overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>
                       <tr>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
-                          Slot #
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: "6px 7px", color: textMain }}>
+                          #
                         </th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
-                          Position
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: "6px 7px", color: textMain }}>
+                          Pos
                         </th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
-                          Player #
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: "6px 7px", color: textMain }}>
+                          No
                         </th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: "6px 7px", color: textMain }}>
                           Player
                         </th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: "6px 7px", color: textMain }}>
                           Club
                         </th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
-                          Pick #
+                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: "6px 7px", color: textMain }}>
+                          Pick
                         </th>
                       </tr>
                     </thead>
@@ -1757,76 +1762,49 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     <tbody>
                       {mainDraftSheetRows.map((s) => (
                         <tr key={s.slotNo}>
-                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>{s.slotNo}</td>
-                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: "6px 7px", color: textMain }}>{s.slotNo}</td>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: "6px 7px", color: textMain }}>
                             {s.displayPosition}
                           </td>
-                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: "6px 7px", color: textMain }}>
                             {s.assigned ? s.assigned.player_no : ""}
                           </td>
-                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: "6px 7px", color: textMain }}>
                             {s.assigned ? s.assigned.player_name : ""}
                           </td>
-                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: "6px 7px", color: textMain }}>
                             {s.assigned ? s.assigned.club : ""}
                           </td>
-                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: "6px 7px", color: textMain }}>
                             {s.assigned && s.assigned.drafted_round && s.assigned.drafted_pick
                               ? `${s.assigned.drafted_round}.${s.assigned.drafted_pick}`
                               : ""}
                           </td>
                         </tr>
                       ))}
-                    </tbody>
-                  </table>
-                </div>
 
-                <div style={{ marginTop: 18, fontWeight: 1000, color: textMain, fontSize: 15 }}>
-                  Miscellaneous
-                </div>
-
-                <div style={{ overflowX: "auto", marginTop: 8 }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                    <thead>
                       <tr>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
-                          Slot #
-                        </th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
-                          Position
-                        </th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
-                          Player #
-                        </th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
-                          Player
-                        </th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
-                          Club
-                        </th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid #e4e7ec", padding: 8, color: textMain }}>
-                          Pick #
-                        </th>
+                        <td colSpan={6} style={{ padding: "8px 7px", fontWeight: 1000, color: textMain }}>
+                          Miscellaneous
+                        </td>
                       </tr>
-                    </thead>
 
-                    <tbody>
                       {miscDraftSheetRows.map((s) => (
                         <tr key={s.slotNo}>
-                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>{s.slotNo}</td>
-                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: "6px 7px", color: textMain }}>{s.slotNo}</td>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: "6px 7px", color: textMain }}>
                             {s.displayPosition}
                           </td>
-                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: "6px 7px", color: textMain }}>
                             {s.assigned ? s.assigned.player_no : ""}
                           </td>
-                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: "6px 7px", color: textMain }}>
                             {s.assigned ? s.assigned.player_name : ""}
                           </td>
-                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: "6px 7px", color: textMain }}>
                             {s.assigned ? s.assigned.club : ""}
                           </td>
-                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: 8, color: textMain }}>
+                          <td style={{ borderBottom: "1px solid #f2f4f7", padding: "6px 7px", color: textMain }}>
                             {s.assigned && s.assigned.drafted_round && s.assigned.drafted_pick
                               ? `${s.assigned.drafted_round}.${s.assigned.drafted_pick}`
                               : ""}
@@ -1837,7 +1815,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                   </table>
                 </div>
 
-                <div style={{ marginTop: 10, fontSize: 12, color: textSoft }}>Slots shown = 46</div>
+                <div style={{ marginTop: 8, fontSize: 11, color: textSoft }}>Slots shown = 46</div>
               </div>
             </div>
           </div>
