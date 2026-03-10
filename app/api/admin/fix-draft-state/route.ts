@@ -71,6 +71,7 @@ export async function POST(req: Request) {
     const { data: draftedPlayers, error: draftedPlayersError } = await supabaseAdmin
       .from("players")
       .select("drafted_pick")
+      .eq("room_id", roomId)
       .not("drafted_pick", "is", null);
 
     if (draftedPlayersError) {
@@ -132,6 +133,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       ok: true,
+      message: "Draft state repaired",
       summary: {
         room_id: roomId,
         drafted_count: draftedCount,
