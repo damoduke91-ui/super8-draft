@@ -177,9 +177,11 @@ export default function AdminClient() {
   const [simStoppedForCoachId, setSimStoppedForCoachId] = useState<number | null>(null);
   const [simHasActiveSession, setSimHasActiveSession] = useState(false);
 
-  const [damianUploadFile, setDamianUploadFile] = useState<File | null>(null);
+    const [damianUploadFile, setDamianUploadFile] = useState<File | null>(null);
   const [damianUploadMsg, setDamianUploadMsg] = useState("");
   const [damianUploadBusy, setDamianUploadBusy] = useState(false);
+  const [kickCoachBusyId, setKickCoachBusyId] = useState<number | null>(null);
+  const [coachSessionMsg, setCoachSessionMsg] = useState("");
   const damianUploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const autoResumeLockRef = useRef(false);
@@ -631,6 +633,46 @@ export default function AdminClient() {
       setDamianUploadMsg(`Import failed: ${e?.message || String(e)}`);
     } finally {
       setDamianUploadBusy(false);
+    }
+  }
+  async function kickCoachSession(coach: Coach) {
+    setCoachSessionMsg("");
+
+    if (!roomId.trim()) {
+      setCoachSessionMsg("Room id is required.");
+      return;
+    }
+
+    if (!coach.session_id?.trim()) {
+      setCoachSessionMsg(`Coach ${coach.coach_id} is not currently joined.`);
+      return;
+    }
+
+    const ok = window.confirm(
+      `Kick Coach ${coach.coach_id} — ${coach.coach_name} out of their current session?\n\nThey will need to rejoin from Join Draft Room.`
+    );
+    if (!ok) return;
+
+    setKickCoachBusyId(coach.coach_id);
+
+    try {
+      const { res, json } = await postJson("/api/admin/kick-coach-session", {
+        roomId: roomId.trim(),
+        coachId: coach.coach_id,
+      });
+
+      if (!res.ok || !json?.ok) {
+        setCoachSessionMsg(`Kick failed: ${json?.error || json?.message || "Unknown error"}`);
+        return;
+      }
+
+      setCoachSessionMsg(`✅ Coach ${coach.coach_id} — ${coach.coach_name} has been kicked out of their session.`);
+      await loadData(roomId.trim());
+      setRefreshKey((k) => k + 1);
+    } catch (e: any) {
+      setCoachSessionMsg(`Kick failed: ${e?.message || String(e)}`);
+    } finally {
+      setKickCoachBusyId(null);
     }
   }
 
@@ -1213,9 +1255,11 @@ export default function AdminClient() {
       <Card title="Coaches Joined">
         {coachesSorted.length ? (
           <div style={{ display: "grid", gap: 12 }}>
-            <SmallText>
+                        <SmallText>
               Joined: <strong>{joinedCoaches.length}</strong> / <strong>{coachesSorted.length}</strong> coaches
             </SmallText>
+
+            {coachSessionMsg ? <div style={{ fontWeight: 950 }}>{coachSessionMsg}</div> : null}
 
             <div
               style={{
@@ -1241,7 +1285,7 @@ export default function AdminClient() {
                       Coach {coach.coach_id} — {coach.coach_name}
                     </div>
 
-                    <div
+                                        <div
                       style={{
                         marginTop: 6,
                         fontSize: 12,
@@ -1251,6 +1295,18 @@ export default function AdminClient() {
                     >
                       {joined ? "Joined" : "Not joined"}
                     </div>
+
+                    {joined ? (
+                      <div style={{ marginTop: 10 }}>
+                        <Button
+                          variant="danger"
+                          onClick={() => kickCoachSession(coach)}
+                          disabled={kickCoachBusyId !== null}
+                        >
+                          {kickCoachBusyId === coach.coach_id ? "Kicking..." : "Kick session"}
+                        </Button>
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}
