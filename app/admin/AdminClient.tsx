@@ -148,6 +148,7 @@ export default function AdminClient() {
   const [draftStateErr, setDraftStateErr] = useState<string>("");
   const [draftActionBusy, setDraftActionBusy] = useState(false);
   const [draftActionMsg, setDraftActionMsg] = useState<string>("");
+  const [fixDraftBusy, setFixDraftBusy] = useState(false);
 
   const [toolsBusy, setToolsBusy] = useState(false);
   const [toolsMsg, setToolsMsg] = useState("");
@@ -533,6 +534,35 @@ export default function AdminClient() {
       setDraftActionMsg(`Reset failed: ${e?.message || String(e)}`);
     } finally {
       setDraftActionBusy(false);
+    }
+  }
+
+  async function fixDraftState() {
+    setDraftActionMsg("");
+    if (!roomId.trim()) return setDraftActionMsg("Room id is required.");
+
+    const ok = window.confirm(
+      `Run FIX DRAFT STATE for "${ROOM_DISPLAY_NAME}"?\n\nThis should repair the live draft state from current drafted players and saved order.\n\nUse this only if the draft looks out of sync.`
+    );
+    if (!ok) return;
+
+    setFixDraftBusy(true);
+    try {
+      const { res, json } = await postJson("/api/admin/fix-draft-state", { roomId: roomId.trim() });
+
+      if (!res.ok || !json?.ok) {
+        setDraftActionMsg(`Fix failed: ${json?.error || json?.message || "Unknown error"}`);
+      } else {
+        setDraftActionMsg(`🛠️ Draft state repaired${json?.message ? `: ${json.message}` : ""}`);
+        await loadDraftState(roomId.trim());
+        await loadData(roomId.trim());
+        await loadProxyPlayers(roomId.trim());
+        setRefreshKey((k) => k + 1);
+      }
+    } catch (e: any) {
+      setDraftActionMsg(`Fix failed: ${e?.message || String(e)}`);
+    } finally {
+      setFixDraftBusy(false);
     }
   }
 
@@ -1060,7 +1090,7 @@ export default function AdminClient() {
   }
 
   const editorLocked = resetBusy || saveBusy;
-  const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || toolsBusy || proxyBusy;
+  const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || fixDraftBusy || toolsBusy || proxyBusy;
 
   return (
     <Page title="Super8 Draft — Admin" subtitle="Draft control centre">
@@ -1090,18 +1120,22 @@ export default function AdminClient() {
           </div>
 
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <Button variant="primary" onClick={startDraft} disabled={draftActionBusy || !roomId.trim()}>
+            <Button variant="primary" onClick={startDraft} disabled={draftActionBusy || fixDraftBusy || !roomId.trim()}>
               {draftActionBusy ? "Working..." : "Start draft"}
             </Button>
 
             <Button
               onClick={() => pauseDraft(!(draftState?.is_paused ?? false))}
-              disabled={draftActionBusy || !roomId.trim()}
+              disabled={draftActionBusy || fixDraftBusy || !roomId.trim()}
             >
               {draftState?.is_paused ? "Resume draft" : "Pause draft"}
             </Button>
 
-            <Button variant="danger" onClick={resetDraft} disabled={draftActionBusy || !roomId.trim()}>
+            <Button onClick={fixDraftState} disabled={draftActionBusy || fixDraftBusy || !roomId.trim()}>
+              {fixDraftBusy ? "Fixing..." : "Fix Draft State"}
+            </Button>
+
+            <Button variant="danger" onClick={resetDraft} disabled={draftActionBusy || fixDraftBusy || !roomId.trim()}>
               Reset draft
             </Button>
           </div>
