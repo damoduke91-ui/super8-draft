@@ -319,7 +319,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const prevDraftCompleteRef = useRef(false);
   const playersListRef = useRef<HTMLDivElement | null>(null);
 
-  const canUseCustomSort = !isAdmin && coachId === 3;
+  const canUseCustomSort = !isAdmin && Number.isFinite(coachId) && coachId > 0;
 
   useEffect(() => {
     try {
@@ -1598,7 +1598,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                       cursor: "pointer",
                       fontSize: 11,
                     }}
-                    title="Coach 3 custom order"
+                    title="Coach custom order"
                   >
                     Custom
                   </button>
@@ -1622,7 +1622,7 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
                     lineHeight: 1.45,
                   }}
                 >
-                  Coach 3 custom order is stored in <strong>Supabase</strong>. Use <strong>Top</strong>, <strong>↑</strong>, and{" "}
+                  Your custom order is stored in <strong>Supabase</strong>. Use <strong>Top</strong>, <strong>↑</strong>, and{" "}
                   <strong>↓</strong> to pre-rank players, then click <strong>Save Custom</strong>.
                   {customOrderDirty ? (
                     <span style={{ marginLeft: 8, fontWeight: 1000, color: "#fde68a" }}>Unsaved changes</span>
