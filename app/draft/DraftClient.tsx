@@ -253,6 +253,24 @@ function createCoachSessionId() {
   return `session_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+async function postCoachSession(roomId: string, coachId: number, sessionId: string | null) {
+  const res = await fetch("/api/coach/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      roomId,
+      coachId,
+      sessionId,
+    }),
+  });
+
+  const json = await res.json().catch(() => ({}));
+
+  if (!res.ok || !json?.ok) {
+    throw new Error(json?.error || "Failed to update coach session");
+  }
+}
+
 export default function DraftClient({ mode = "coach" }: DraftClientProps) {
   const pathname = usePathname();
   const isAdminRoute = pathname?.startsWith("/admin") ?? false;
@@ -370,40 +388,18 @@ export default function DraftClient({ mode = "coach" }: DraftClientProps) {
     let cancelled = false;
 
     async function markJoined() {
-      const { error } = await supabase
-        .from("coaches")
-        .update({ session_id: sessionId })
-        .eq("room_id", room)
-        .eq("coach_id", coachId);
-
-      if (error && !cancelled) {
-        console.error("coach session join update error:", error);
+      try {
+        await postCoachSession(room, coachId, sessionId);
+      } catch (error) {
+        if (!cancelled) console.error("coach session join update error:", error);
       }
     }
 
     async function markLeft() {
-      const { data, error } = await supabase
-        .from("coaches")
-        .select("session_id")
-        .eq("room_id", room)
-        .eq("coach_id", coachId)
-        .maybeSingle();
-
-      if (error) {
-        console.error("coach session leave read error:", error);
-        return;
-      }
-
-      if ((data as { session_id?: string | null } | null)?.session_id !== sessionId) return;
-
-      const { error: clearError } = await supabase
-        .from("coaches")
-        .update({ session_id: null })
-        .eq("room_id", room)
-        .eq("coach_id", coachId);
-
-      if (clearError) {
-        console.error("coach session leave clear error:", clearError);
+      try {
+        await postCoachSession(room, coachId, null);
+      } catch (error) {
+        console.error("coach session leave clear error:", error);
       }
     }
 
