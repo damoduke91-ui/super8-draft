@@ -42,7 +42,8 @@ type Player = {
 
 const BLOCKS = [
   { label: "Rounds 1–2", from: 1, to: 2 },
-  { label: "Rounds 3–10", from: 3, to: 10 },
+  { label: "Rounds 3–4", from: 3, to: 4 },
+  { label: "Rounds 5–10", from: 5, to: 10 },
   { label: "Rounds 11–20", from: 11, to: 20 },
   { label: "Rounds 21–30", from: 21, to: 30 },
   { label: "Rounds 31–40", from: 31, to: 40 },
@@ -177,7 +178,7 @@ export default function AdminClient() {
   const [simStoppedForCoachId, setSimStoppedForCoachId] = useState<number | null>(null);
   const [simHasActiveSession, setSimHasActiveSession] = useState(false);
 
-    const [damianUploadFile, setDamianUploadFile] = useState<File | null>(null);
+  const [damianUploadFile, setDamianUploadFile] = useState<File | null>(null);
   const [damianUploadMsg, setDamianUploadMsg] = useState("");
   const [damianUploadBusy, setDamianUploadBusy] = useState(false);
   const [kickCoachBusyId, setKickCoachBusyId] = useState<number | null>(null);
@@ -635,6 +636,7 @@ export default function AdminClient() {
       setDamianUploadBusy(false);
     }
   }
+
   async function kickCoachSession(coach: Coach) {
     setCoachSessionMsg("");
 
@@ -1255,7 +1257,7 @@ export default function AdminClient() {
       <Card title="Coaches Joined">
         {coachesSorted.length ? (
           <div style={{ display: "grid", gap: 12 }}>
-                        <SmallText>
+            <SmallText>
               Joined: <strong>{joinedCoaches.length}</strong> / <strong>{coachesSorted.length}</strong> coaches
             </SmallText>
 
@@ -1285,7 +1287,7 @@ export default function AdminClient() {
                       Coach {coach.coach_id} — {coach.coach_name}
                     </div>
 
-                                        <div
+                    <div
                       style={{
                         marginTop: 6,
                         fontSize: 12,
