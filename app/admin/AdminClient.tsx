@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import DraftClient from "../draft/DraftClient";
 import { supabase } from "../lib/supabase";
+import { Page, Card, Button, SmallText } from "../ui/ui";
 
 type DraftState = {
   room_id: string;
@@ -28,13 +29,15 @@ type DraftOrderRow = {
   coach_id: number;
 };
 
-type LastPickRow = {
+type Player = {
+  player_no: number;
+  pos: string;
+  club: string;
   player_name: string;
-  pos: string | null;
-  club: string | null;
-  drafted_pick: number | null;
-  drafted_round: number | null;
+  average: number;
   drafted_by_coach_id: number | null;
+  drafted_round: number | null;
+  drafted_pick: number | null;
 };
 
 const BLOCKS = [
@@ -46,6 +49,21 @@ const BLOCKS = [
   { label: "Rounds 41–46", from: 41, to: 46 },
 ] as const;
 
+const ROOM_DISPLAY_NAME = "Super 8 Room";
+
+const POS_TABS = ["ALL", "KD", "DEF", "MID", "FOR", "KF", "RUC"] as const;
+type PosTab = (typeof POS_TABS)[number];
+
+const POS_LABEL: Record<PosTab, string> = {
+  ALL: "All",
+  KD: "KD",
+  DEF: "DEF",
+  MID: "MID",
+  FOR: "FOR",
+  KF: "KF",
+  RUC: "RUC",
+};
+
 function pauseReasonLabel(pause_reason: string | null) {
   if (!pause_reason) return null;
   if (pause_reason.startsWith("WAIT_BLOCK_")) {
@@ -53,6 +71,30 @@ function pauseReasonLabel(pause_reason: string | null) {
     return `Waiting for Admin to set draft order for rounds ${block}…`;
   }
   return pause_reason;
+}
+
+function norm(s: string) {
+  return (s || "").toLowerCase().trim();
+}
+
+function splitPos(posRaw: string): string[] {
+  return (posRaw || "")
+    .split("/")
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function matchesTab(player: Player, tab: PosTab): boolean {
+  const tags = splitPos(player.pos);
+  if (tab === "ALL") return true;
+
+  if (tab === "DEF") return tags.includes("DEF") && !tags.includes("KD");
+  if (tab === "FOR") return tags.includes("FOR") && !tags.includes("KF");
+
+  if (tab === "KD") return tags.includes("KD");
+  if (tab === "KF") return tags.includes("KF");
+
+  return tags.includes(tab);
 }
 
 async function postJson(url: string, body: any) {
@@ -94,10 +136,11 @@ export default function AdminClient() {
 
   const [autoSaveAfterReset, setAutoSaveAfterReset] = useState(true);
 
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [showDebug, setShowDebug] = useState(false);
+  const [showProxyPick, setShowProxyPick] = useState(false);
+  const [showLiveBoard, setShowLiveBoard] = useState(true);
 
-  const [showManualEditor, setShowManualEditor] = useState(true);
-  const [showHealthMonitor, setShowHealthMonitor] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const block = BLOCKS[blockIdx];
 
@@ -106,13 +149,237 @@ export default function AdminClient() {
   const [draftActionBusy, setDraftActionBusy] = useState(false);
   const [draftActionMsg, setDraftActionMsg] = useState<string>("");
 
-  const [healthBusy, setHealthBusy] = useState(false);
-  const [healthErr, setHealthErr] = useState("");
-  const [lastPick, setLastPick] = useState<LastPickRow | null>(null);
-  const [healthCheckedAt, setHealthCheckedAt] = useState<string>("");
+  const [toolsBusy, setToolsBusy] = useState(false);
+  const [toolsMsg, setToolsMsg] = useState("");
+  const [manualCoachIdsStr, setManualCoachIdsStr] = useState("");
+  const [simRounds, setSimRounds] = useState("46");
+  const [resetDraftBeforeSim, setResetDraftBeforeSim] = useState(true);
 
-  const [fixBusy, setFixBusy] = useState(false);
-  const [fixMsg, setFixMsg] = useState("");
+  const [simProgressStart, setSimProgressStart] = useState(0);
+  const [simProgressCurrent, setSimProgressCurrent] = useState(0);
+  const [simProgressTotal, setSimProgressTotal] = useState(368);
+  const [simProgressLabel, setSimProgressLabel] = useState("Waiting to start...");
+  const simProgressTimerRef = useRef<number | null>(null);
+
+  const [proxyCoachId, setProxyCoachId] = useState<number>(1);
+  const [proxyMsg, setProxyMsg] = useState<string>("");
+  const [proxyBusy, setProxyBusy] = useState(false);
+  const [proxyErr, setProxyErr] = useState<string>("");
+  const [proxyPlayers, setProxyPlayers] = useState<Player[]>([]);
+  const [proxyTab, setProxyTab] = useState<PosTab>("ALL");
+  const [proxySearch, setProxySearch] = useState("");
+  const [proxySortKey, setProxySortKey] = useState<"player_no" | "player_name" | "club" | "average">("average");
+  const [proxySortDir, setProxySortDir] = useState<"asc" | "desc">("desc");
+  const [proxyShowDrafted, setProxyShowDrafted] = useState(false);
+
+  const [simWaitingForManual, setSimWaitingForManual] = useState(false);
+  const [simStoppedForCoachId, setSimStoppedForCoachId] = useState<number | null>(null);
+  const [simHasActiveSession, setSimHasActiveSession] = useState(false);
+
+  const autoResumeLockRef = useRef(false);
+
+  const fieldBase: React.CSSProperties = {
+    width: "100%",
+    padding: 10,
+    borderRadius: 10,
+    border: "1px solid #d1d5db",
+    background: "#fff",
+    color: "#111",
+    outline: "none",
+  };
+
+  const manualCoachIdsParsed = useMemo(() => {
+    return manualCoachIdsStr
+      .split(",")
+      .map((x) => Number(x.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+  }, [manualCoachIdsStr]);
+
+  const simProgressMade = Math.max(0, simProgressCurrent - simProgressStart);
+  const simProgressMax = Math.max(1, simProgressTotal - simProgressStart);
+  const simProgressPct = Math.max(0, Math.min(100, Math.round((simProgressMade / simProgressMax) * 100)));
+
+  async function fetchDraftedPlayerCount(room: string) {
+    const { count, error } = await supabase
+      .from("players")
+      .select("*", { count: "exact", head: true })
+      .eq("room_id", room)
+      .not("drafted_by_coach_id", "is", null);
+
+    if (error) throw new Error(error.message);
+    return count ?? 0;
+  }
+
+  function stopSimProgressPolling() {
+    if (simProgressTimerRef.current != null) {
+      window.clearInterval(simProgressTimerRef.current);
+      simProgressTimerRef.current = null;
+    }
+  }
+
+  function startSimProgressPolling(room: string, roundsNum: number, resetFirst: boolean) {
+    stopSimProgressPolling();
+
+    const total = roundsNum * 8;
+    setSimProgressTotal(total);
+    setSimProgressStart(resetFirst ? 0 : simProgressCurrent);
+    setSimProgressLabel("Preparing simulation...");
+
+    const poll = async () => {
+      try {
+        const count = await fetchDraftedPlayerCount(room);
+        setSimProgressCurrent(count);
+
+        if (draftState?.current_round && draftState?.current_pick_in_round && draftState?.current_coach_id) {
+          const pausedText = draftState.is_paused ? " • PAUSED" : "";
+          setSimProgressLabel(
+            `Round ${draftState.current_round} • Pick ${draftState.current_pick_in_round} • Coach ${draftState.current_coach_id}${pausedText}`
+          );
+        } else {
+          setSimProgressLabel(`Processed ${count} picks so far...`);
+        }
+      } catch {
+        // ignore a single failed poll
+      }
+    };
+
+    void poll();
+
+    simProgressTimerRef.current = window.setInterval(() => {
+      void poll();
+    }, 500);
+  }
+
+  useEffect(() => {
+    return () => {
+      stopSimProgressPolling();
+    };
+  }, []);
+
+  async function runSimulation(options?: { resetDraft?: boolean; isAutoResume?: boolean }) {
+    setToolsMsg("");
+    if (!roomId.trim()) return setToolsMsg("Room id is required.");
+
+    const roundsNum = Number(simRounds.trim());
+    if (!Number.isFinite(roundsNum) || roundsNum <= 0) {
+      return setToolsMsg("Rounds must be a valid positive number.");
+    }
+
+    const resetFirst = options?.resetDraft ?? resetDraftBeforeSim;
+    const isAutoResume = options?.isAutoResume ?? false;
+
+    if (!isAutoResume) {
+      const manualLabel =
+        manualCoachIdsParsed.length > 0 ? `Manual coaches: [${manualCoachIdsParsed.join(", ")}]` : "Manual coaches: none";
+
+      const ok = window.confirm(
+        `Run 8-coach draft simulation for room "${roomId.trim()}"?\n\n${manualLabel}\nRounds: ${roundsNum}\nReset before sim: ${
+          resetFirst ? "YES" : "NO"
+        }\n\nIf manual coach IDs are included, the simulation will stop when one of those coaches is on the clock.`
+      );
+      if (!ok) return;
+    }
+
+    setToolsBusy(true);
+
+    try {
+      const existingCount = resetFirst ? 0 : await fetchDraftedPlayerCount(roomId.trim());
+      setSimProgressStart(existingCount);
+      setSimProgressCurrent(existingCount);
+      setSimProgressTotal(roundsNum * 8);
+      setSimProgressLabel(isAutoResume ? "Resuming simulation..." : "Starting simulation...");
+      startSimProgressPolling(roomId.trim(), roundsNum, resetFirst);
+
+      const { res, json } = await postJson("/api/admin/simulate-draft", {
+        roomId: roomId.trim(),
+        rounds: roundsNum,
+        manualCoachIds: manualCoachIdsParsed,
+        resetDraft: resetFirst,
+      });
+
+      stopSimProgressPolling();
+
+      try {
+        const finalCount = await fetchDraftedPlayerCount(roomId.trim());
+        setSimProgressCurrent(finalCount);
+      } catch {
+        // ignore
+      }
+
+      if (!res.ok || !json?.ok) {
+        setToolsMsg(`Sim failed: ${json?.error || json?.message || "Unknown error"}`);
+        setSimProgressLabel("Simulation failed");
+        setSimWaitingForManual(false);
+        setSimStoppedForCoachId(null);
+        setSimHasActiveSession(false);
+      } else if (json?.status === "waiting_for_manual_pick") {
+        const stoppedCoach = Number(json?.stoppedForCoachId ?? 0) || null;
+        const stoppedPick = json?.stoppedAtOverallPick ?? "?";
+
+        setToolsMsg(`⏸️ Sim paused for manual coach ${stoppedCoach ?? "?"} at overall pick ${stoppedPick}.`);
+        setSimProgressLabel(`Waiting for manual coach ${stoppedCoach ?? "?"} at overall pick ${stoppedPick}`);
+        setSimWaitingForManual(true);
+        setSimStoppedForCoachId(stoppedCoach);
+        setSimHasActiveSession(true);
+      } else {
+        setToolsMsg(`✅ Sim complete: ${json?.picksDone ?? 0} picks (${json?.message || "done"})`);
+        setSimProgressLabel("Simulation complete");
+        setSimWaitingForManual(false);
+        setSimStoppedForCoachId(null);
+        setSimHasActiveSession(false);
+      }
+
+      await loadDraftState(roomId.trim());
+      await loadData(roomId.trim());
+      await loadProxyPlayers(roomId.trim());
+      setRefreshKey((k) => k + 1);
+    } catch (e: any) {
+      stopSimProgressPolling();
+      setToolsMsg(`Sim failed: ${e?.message || String(e)}`);
+      setSimProgressLabel("Simulation failed");
+      setSimWaitingForManual(false);
+      setSimStoppedForCoachId(null);
+    } finally {
+      setToolsBusy(false);
+    }
+  }
+
+  async function simulate8CoachDraft() {
+    await runSimulation();
+  }
+
+  async function resumeSimulationAfterManualPick() {
+    if (autoResumeLockRef.current) return;
+    autoResumeLockRef.current = true;
+    try {
+      await runSimulation({ resetDraft: false, isAutoResume: true });
+    } finally {
+      autoResumeLockRef.current = false;
+    }
+  }
+
+  function exportPicksXlsx() {
+    setToolsMsg("");
+    if (!roomId.trim()) return setToolsMsg("Room id is required.");
+    window.open(`/api/admin/export-picks?room=${encodeURIComponent(roomId.trim())}`, "_blank");
+  }
+
+  function applyCoachPreset(mode: "two-coach-3-first" | "two-coach-3-second" | "full-8") {
+    setShuffle(false);
+    setSeed("");
+
+    if (mode === "two-coach-3-first") {
+      setCoachIdsStr("3,1");
+      return;
+    }
+
+    if (mode === "two-coach-3-second") {
+      setCoachIdsStr("1,3");
+      return;
+    }
+
+    setCoachIdsStr("1,2,3,4,5,6,7,8");
+  }
 
   async function loadDraftState(room: string) {
     setDraftStateErr("");
@@ -123,9 +390,7 @@ export default function AdminClient() {
 
     const { data, error } = await supabase
       .from("draft_state")
-      .select(
-        "room_id,is_paused,pause_reason,rounds_total,current_round,current_pick_in_round,current_coach_id"
-      )
+      .select("room_id,is_paused,pause_reason,rounds_total,current_round,current_pick_in_round,current_coach_id")
       .eq("room_id", room.trim())
       .maybeSingle();
 
@@ -138,82 +403,51 @@ export default function AdminClient() {
     setDraftState((data as DraftState) || null);
   }
 
-  async function loadHealthMonitor(room: string) {
-    setHealthErr("");
-
-    if (!room.trim()) {
-      setLastPick(null);
-      setHealthCheckedAt("");
-      return;
-    }
-
-    setHealthBusy(true);
-    try {
-      const { data, error } = await supabase
-        .from("players")
-        .select("player_name,pos,club,drafted_pick,drafted_round,drafted_by_coach_id")
-        .not("drafted_pick", "is", null)
-        .order("drafted_pick", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (error) {
-        setHealthErr(`last pick lookup error: ${error.message}`);
-        setLastPick(null);
-      } else {
-        setLastPick((data as LastPickRow) || null);
-      }
-
-      setHealthCheckedAt(new Date().toLocaleTimeString());
-    } catch (e: any) {
-      setHealthErr(`last pick lookup error: ${e?.message || String(e)}`);
-      setLastPick(null);
-      setHealthCheckedAt(new Date().toLocaleTimeString());
-    } finally {
-      setHealthBusy(false);
-    }
-  }
-
   useEffect(() => {
     if (!roomId.trim()) return;
 
     loadDraftState(roomId.trim());
-    loadHealthMonitor(roomId.trim());
 
-    const draftStateChannel = supabase.channel(`admin_draft_state_${roomId.trim()}`);
-    draftStateChannel.on(
+    const ch = supabase.channel(`admin_draft_state_${roomId.trim()}`);
+    ch.on(
       "postgres_changes",
       { event: "*", schema: "public", table: "draft_state", filter: `room_id=eq.${roomId.trim()}` },
-      () => {
-        loadDraftState(roomId.trim());
-        loadHealthMonitor(roomId.trim());
-      }
+      () => loadDraftState(roomId.trim())
     );
-    draftStateChannel.subscribe();
-
-    const playersChannel = supabase.channel(`admin_players_health_${roomId.trim()}`);
-    playersChannel.on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "players" },
-      () => {
-        loadHealthMonitor(roomId.trim());
-      }
-    );
-    playersChannel.subscribe();
+    ch.subscribe();
 
     return () => {
-      supabase.removeChannel(draftStateChannel);
-      supabase.removeChannel(playersChannel);
+      supabase.removeChannel(ch);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
+
+  useEffect(() => {
+    if (!roomId.trim()) return;
+    if (!simHasActiveSession) return;
+    if (!simWaitingForManual) return;
+    if (toolsBusy) return;
+    if (!simStoppedForCoachId) return;
+    if (!draftState) return;
+
+    const coachMovedOn = draftState.current_coach_id !== simStoppedForCoachId;
+    const draftStillLive = !draftState.is_paused;
+
+    if (coachMovedOn && draftStillLive) {
+      setToolsMsg(
+        `▶️ Manual pick detected for coach ${simStoppedForCoachId}. Resuming simulation from coach ${draftState.current_coach_id}...`
+      );
+      setSimWaitingForManual(false);
+      void resumeSimulationAfterManualPick();
+    }
+  }, [roomId, simHasActiveSession, simWaitingForManual, simStoppedForCoachId, draftState, toolsBusy]);
 
   async function startDraft() {
     setDraftActionMsg("");
     if (!roomId.trim()) return setDraftActionMsg("Room id is required.");
 
     const ok = window.confirm(
-      `Start draft for room "${roomId.trim()}"?\n\nThis should create/initialize draft_state if needed and set draft LIVE.`
+      `Start draft for "${ROOM_DISPLAY_NAME}"?\n\nThis should create/initialize draft_state if needed and set draft LIVE.`
     );
     if (!ok) return;
 
@@ -226,7 +460,7 @@ export default function AdminClient() {
       } else {
         setDraftActionMsg("✅ Draft started");
         await loadDraftState(roomId.trim());
-        await loadHealthMonitor(roomId.trim());
+        await loadProxyPlayers(roomId.trim());
         setRefreshKey((k) => k + 1);
       }
     } catch (e: any) {
@@ -241,9 +475,7 @@ export default function AdminClient() {
     if (!roomId.trim()) return setDraftActionMsg("Room id is required.");
 
     const ok = window.confirm(
-      nextPaused
-        ? `Pause draft for room "${roomId.trim()}"?`
-        : `Resume draft for room "${roomId.trim()}"?`
+      nextPaused ? `Pause draft for "${ROOM_DISPLAY_NAME}"?` : `Resume draft for "${ROOM_DISPLAY_NAME}"?`
     );
     if (!ok) return;
 
@@ -260,7 +492,6 @@ export default function AdminClient() {
       } else {
         setDraftActionMsg(nextPaused ? "⏸️ Draft paused" : "▶️ Draft resumed");
         await loadDraftState(roomId.trim());
-        await loadHealthMonitor(roomId.trim());
         setRefreshKey((k) => k + 1);
       }
     } catch (e: any) {
@@ -275,7 +506,7 @@ export default function AdminClient() {
     if (!roomId.trim()) return setDraftActionMsg("Room id is required.");
 
     const ok = window.confirm(
-      `RESET draft for room "${roomId.trim()}"?\n\nThis should reset draft_state + clear drafted players (depending on your RPC/route).\n\nThis cannot be undone.`
+      `RESET the draft for "${ROOM_DISPLAY_NAME}"?\n\nThis should reset draft_state + clear drafted players.\n\nThis cannot be undone.`
     );
     if (!ok) return;
 
@@ -287,9 +518,15 @@ export default function AdminClient() {
         setDraftActionMsg(`Reset failed: ${json?.error || json?.message || "Unknown error"}`);
       } else {
         setDraftActionMsg("♻️ Draft reset");
+        setSimWaitingForManual(false);
+        setSimStoppedForCoachId(null);
+        setSimHasActiveSession(false);
+        setSimProgressStart(0);
+        setSimProgressCurrent(0);
+        setSimProgressLabel("Draft reset");
         await loadDraftState(roomId.trim());
         await loadData(roomId.trim());
-        await loadHealthMonitor(roomId.trim());
+        await loadProxyPlayers(roomId.trim());
         setRefreshKey((k) => k + 1);
       }
     } catch (e: any) {
@@ -299,44 +536,17 @@ export default function AdminClient() {
     }
   }
 
-  async function fixDraftState() {
-    setFixMsg("");
-    if (!roomId.trim()) return setFixMsg("Room id is required.");
-
-    const ok = window.confirm(
-      `Run Emergency Fix Draft State for room "${roomId.trim()}"?\n\nThis will recalculate the next round, pick and coach from drafted players + draft_order.`
-    );
-    if (!ok) return;
-
-    setFixBusy(true);
-    try {
-      const { res, json } = await postJson("/api/admin/fix-draft-state", {
-        roomId: roomId.trim(),
-      });
-
-      if (!res.ok || !json?.ok) {
-        setFixMsg(`Fix failed: ${json?.error || json?.message || "Unknown error"}`);
-      } else {
-        const summary =
-          json?.summary
-            ? `Round ${json.summary.current_round}, Pick ${json.summary.current_pick_in_round}, Coach ${json.summary.current_coach_id}`
-            : "Draft state repaired";
-
-        setFixMsg(`🛠️ Emergency fix applied — ${summary}`);
-        await loadDraftState(roomId.trim());
-        await loadData(roomId.trim());
-        await loadHealthMonitor(roomId.trim());
-        setRefreshKey((k) => k + 1);
-      }
-    } catch (e: any) {
-      setFixMsg(`Fix failed: ${e?.message || String(e)}`);
-    } finally {
-      setFixBusy(false);
-    }
-  }
-
   const draftStatus = useMemo(() => {
     if (!draftState) return "No draft_state row yet";
+
+    const isComplete =
+      draftState.is_paused &&
+      (draftState.pause_reason === "Draft complete" || draftState.current_round > draftState.rounds_total);
+
+    if (isComplete) {
+      return `COMPLETE • 46 rounds finished`;
+    }
+
     const live = draftState.is_paused ? "PAUSED" : "LIVE";
     return `${live} • Round ${draftState.current_round}/${draftState.rounds_total} • Pick ${draftState.current_pick_in_round} • Coach ${draftState.current_coach_id}`;
   }, [draftState]);
@@ -385,6 +595,17 @@ export default function AdminClient() {
     return inferredCoachIds.map((id) => ({ id, name: `Coach ${id}` }));
   }, [coachesSorted, inferredCoachIds]);
 
+  const joinedCoaches = useMemo(() => {
+    return coachesSorted.filter((c) => !!c.session_id?.trim());
+  }, [coachesSorted]);
+
+  useEffect(() => {
+    if (!coachOptions.length) return;
+    const has = coachOptions.some((c) => c.id === proxyCoachId);
+    if (!has) setProxyCoachId(coachOptions[0].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coachOptions.length]);
+
   const nCoaches = coachOptions.length;
 
   const draftOrderByPick = useMemo(() => {
@@ -425,9 +646,7 @@ export default function AdminClient() {
     }
 
     if (oRes.error) {
-      setLoadErr(
-        (prev) => (prev ? prev + "\n" : "") + `Draft order load error: ${oRes.error.message}`
-      );
+      setLoadErr((prev) => (prev ? prev + "\n" : "") + `Draft order load error: ${oRes.error.message}`);
       setDraftOrder([]);
     } else {
       setDraftOrder((oRes.data as DraftOrderRow[]) || []);
@@ -436,7 +655,6 @@ export default function AdminClient() {
 
   useEffect(() => {
     loadData(roomId.trim());
-    loadHealthMonitor(roomId.trim());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
 
@@ -467,7 +685,6 @@ export default function AdminClient() {
       } else {
         setMsg(`✅ Generated snake order for ${block.label}`);
         await loadData(roomId.trim());
-        await loadHealthMonitor(roomId.trim());
         setRefreshKey((k) => k + 1);
       }
     } catch (e: any) {
@@ -605,18 +822,10 @@ export default function AdminClient() {
     });
   }
 
-  const blockPickCount = useMemo(() => {
-    if (!nCoaches) return 0;
-    return (block.to - block.from + 1) * nCoaches;
-  }, [block.from, block.to, nCoaches]);
-
-  const changedCount = useMemo(() => Object.keys(edits).length, [edits]);
-  const willWriteCount = changedCount > 0 ? blockPickCount : 0;
-
   async function saveManualEdits() {
     setSaveMsg("");
     if (!roomId.trim()) return setSaveMsg("Room id is required.");
-    if (!changedCount) return setSaveMsg("No changes to save.");
+    if (!Object.keys(edits).length) return setSaveMsg("No changes to save.");
     if (!nCoaches) return setSaveMsg("No coaches/columns available.");
 
     const { start, end } = blockOverallPickRange();
@@ -646,7 +855,6 @@ export default function AdminClient() {
         setSaveMsg(`✅ Saved block ${block.label} (${json.updated ?? updates.length} picks)`);
         setEdits({});
         await loadData(roomId.trim());
-        await loadHealthMonitor(roomId.trim());
         setRefreshKey((k) => k + 1);
       }
     } catch (e: any) {
@@ -724,7 +932,6 @@ export default function AdminClient() {
       }
 
       await loadData(roomId.trim());
-      await loadHealthMonitor(roomId.trim());
       setRefreshKey((k) => k + 1);
     } catch (e: any) {
       setSaveMsg(`Reset failed: ${e?.message || String(e)}`);
@@ -733,578 +940,890 @@ export default function AdminClient() {
     }
   }
 
+  async function loadProxyPlayers(room: string) {
+    setProxyErr("");
+    if (!room.trim()) {
+      setProxyPlayers([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("players")
+      .select("player_no,pos,club,player_name,average,drafted_by_coach_id,drafted_round,drafted_pick")
+      .eq("room_id", room.trim());
+
+    if (error) {
+      setProxyErr(`Players load error: ${error.message}`);
+      setProxyPlayers([]);
+      return;
+    }
+
+    setProxyPlayers((data as Player[]) || []);
+  }
+
+  useEffect(() => {
+    loadProxyPlayers(roomId.trim());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
+
+  useEffect(() => {
+    if (!roomId.trim()) return;
+    loadProxyPlayers(roomId.trim());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+
+  const proxyCoachName = useMemo(() => {
+    const found = coachOptions.find((c) => c.id === proxyCoachId);
+    return found?.name ?? `Coach ${proxyCoachId}`;
+  }, [coachOptions, proxyCoachId]);
+
+  const proxyFiltered = useMemo(() => {
+    let list = proxyPlayers;
+
+    if (!proxyShowDrafted) list = list.filter((p) => p.drafted_by_coach_id == null);
+    list = list.filter((p) => matchesTab(p, proxyTab));
+
+    const q = norm(proxySearch);
+    if (q) {
+      list = list.filter((p) => {
+        const hay = [String(p.player_no), p.player_name, p.club, p.pos, String(p.average ?? "")]
+          .map(norm)
+          .join(" | ");
+        return hay.includes(q);
+      });
+    }
+
+    list = list.slice().sort((a, b) => {
+      const dir = proxySortDir === "asc" ? 1 : -1;
+      if (proxySortKey === "player_no") return (a.player_no - b.player_no) * dir;
+      if (proxySortKey === "average") return ((a.average ?? 0) - (b.average ?? 0)) * dir;
+      if (proxySortKey === "club") return a.club.localeCompare(b.club) * dir;
+      return a.player_name.localeCompare(b.player_name) * dir;
+    });
+
+    return list;
+  }, [proxyPlayers, proxyShowDrafted, proxyTab, proxySearch, proxySortKey, proxySortDir]);
+
+  function toggleProxySort(key: typeof proxySortKey) {
+    if (key === proxySortKey) setProxySortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setProxySortKey(key);
+      setProxySortDir(key === "average" ? "desc" : "asc");
+    }
+  }
+
+  async function proxyDraftPlayer(p: Player) {
+    setProxyMsg("");
+    setProxyErr("");
+
+    const room = roomId.trim();
+    if (!room) return setProxyErr("Room id is required.");
+    if (!draftState) return setProxyErr("Draft not started yet (no draft_state row). Start the draft first.");
+    if (draftState.is_paused) return setProxyErr(pauseReasonLabel(draftState.pause_reason) ?? "Draft is paused.");
+    if (proxyBusy) return;
+    if (p.drafted_by_coach_id != null) return setProxyErr("That player is already drafted.");
+
+    const ok = window.confirm(
+      `Draft this player for ${proxyCoachName}?\n\n#${p.player_no} — ${p.player_name}\n${p.club} • ${p.pos} • Avg ${p.average}\n\nThis uses ADMIN override for absent-coach emergencies.`
+    );
+    if (!ok) return;
+
+    setProxyBusy(true);
+    try {
+      const { data, error } = await supabase.rpc("draft_pick", {
+        p_room_id: room,
+        p_player_no: p.player_no,
+        p_coach_id: proxyCoachId,
+        p_override_turn: true,
+      });
+
+      if (error) {
+        setProxyErr(`Draft failed: ${error.message}`);
+        return;
+      }
+
+      const res = Array.isArray(data) ? data[0] : data;
+      if (!res?.ok) {
+        setProxyErr(`Draft failed: ${res?.message ?? "Unknown error"}`);
+        return;
+      }
+
+      setProxyMsg(`✅ Drafted #${p.player_no} (${p.player_name}) for ${proxyCoachName}`);
+      await loadDraftState(room);
+      await loadProxyPlayers(room);
+      setRefreshKey((k) => k + 1);
+    } catch (e: any) {
+      setProxyErr(`Draft failed: ${e?.message || String(e)}`);
+    } finally {
+      setProxyBusy(false);
+    }
+  }
+
   const editorLocked = resetBusy || saveBusy;
-
-  const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || fixBusy;
-
-  const healthStatusText = useMemo(() => {
-    if (!draftState) return "No draft_state row";
-    if (draftState.is_paused) return "Paused";
-    return "Live";
-  }, [draftState]);
+  const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || toolsBusy || proxyBusy;
 
   return (
-    <div style={{ padding: 16, maxWidth: 1200 }}>
-      <h1 style={{ marginTop: 0 }}>Admin</h1>
-
-      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12, marginBottom: 14 }}>
+    <Page title="Super8 Draft — Admin" subtitle="Draft control centre">
+      <Card title="Draft Controls">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
-            <div style={{ fontWeight: 900, marginBottom: 4 }}>Draft Controls</div>
-            <div style={{ fontSize: 12, opacity: 0.8 }}>
-              Room: <strong>{roomId.trim() || "(blank)"}</strong> • Status: <strong>{draftStatus}</strong>
-            </div>
+            <SmallText>
+              Room: <strong>{ROOM_DISPLAY_NAME}</strong> • Status: <strong>{draftStatus}</strong>
+            </SmallText>
 
             {draftState?.is_paused ? (
-              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
+              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.9 }}>
                 Reason: <strong>{pauseReasonLabel(draftState.pause_reason) ?? "Paused"}</strong>
+                {draftState.pause_reason === "Draft complete" ? (
+                  <span style={{ marginLeft: 8, fontWeight: 900 }}>• No more picks available</span>
+                ) : null}
               </div>
             ) : null}
 
             {draftStateErr ? (
-              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900, color: "#b91c1c" }}>
+              <div style={{ marginTop: 10, fontSize: 12, fontWeight: 950, color: "#b91c1c" }}>
                 {draftStateErr}
               </div>
             ) : null}
 
-            {draftActionMsg ? <div style={{ marginTop: 8, fontWeight: 900 }}>{draftActionMsg}</div> : null}
-            {fixMsg ? <div style={{ marginTop: 8, fontWeight: 900 }}>{fixMsg}</div> : null}
+            {draftActionMsg ? <div style={{ marginTop: 10, fontWeight: 950 }}>{draftActionMsg}</div> : null}
           </div>
 
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={startDraft}
-              disabled={draftActionBusy || !roomId.trim()}
-              style={{
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "1px solid #222",
-                background: "#111",
-                color: "#fff",
-                fontWeight: 900,
-                cursor: draftActionBusy ? "not-allowed" : "pointer",
-              }}
-              title="Create/initialize draft_state and start the draft"
-            >
+            <Button variant="primary" onClick={startDraft} disabled={draftActionBusy || !roomId.trim()}>
               {draftActionBusy ? "Working..." : "Start draft"}
-            </button>
+            </Button>
 
-            <button
-              type="button"
+            <Button
               onClick={() => pauseDraft(!(draftState?.is_paused ?? false))}
               disabled={draftActionBusy || !roomId.trim()}
-              style={{
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "1px solid #222",
-                background: "#fff",
-                fontWeight: 900,
-                cursor: draftActionBusy ? "not-allowed" : "pointer",
-              }}
-              title="Pause or resume draft"
             >
               {draftState?.is_paused ? "Resume draft" : "Pause draft"}
-            </button>
+            </Button>
 
-            <button
-              type="button"
-              onClick={resetDraft}
-              disabled={draftActionBusy || !roomId.trim()}
-              style={{
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "1px solid #b91c1c",
-                background: "#fff",
-                color: "#b91c1c",
-                fontWeight: 900,
-                cursor: draftActionBusy ? "not-allowed" : "pointer",
-              }}
-              title="Reset the draft (depends on your /api/admin/reset-draft implementation)"
-            >
+            <Button variant="danger" onClick={resetDraft} disabled={draftActionBusy || !roomId.trim()}>
               Reset draft
-            </button>
+            </Button>
+          </div>
+        </div>
+      </Card>
 
-            <button
-              type="button"
-              onClick={fixDraftState}
-              disabled={fixBusy || !roomId.trim()}
+      <Card title="Coaches Joined">
+        {coachesSorted.length ? (
+          <div style={{ display: "grid", gap: 12 }}>
+            <SmallText>
+              Joined: <strong>{joinedCoaches.length}</strong> / <strong>{coachesSorted.length}</strong> coaches
+            </SmallText>
+
+            <div
               style={{
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "1px solid #92400e",
-                background: fixBusy ? "#fcd34d" : "#fff7ed",
-                color: "#92400e",
-                fontWeight: 900,
-                cursor: fixBusy ? "not-allowed" : "pointer",
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: 10,
               }}
-              title="Emergency repair of current round, pick and coach"
             >
-              {fixBusy ? "Fixing..." : "Fix Draft State"}
-            </button>
+              {coachesSorted.map((coach) => {
+                const joined = !!coach.session_id?.trim();
+
+                return (
+                  <div
+                    key={coach.coach_id}
+                    style={{
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 12,
+                      padding: 12,
+                      background: joined ? "#ecfdf3" : "#fff",
+                    }}
+                  >
+                    <div style={{ fontWeight: 950 }}>
+                      Coach {coach.coach_id} — {coach.coach_name}
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop: 6,
+                        fontSize: 12,
+                        fontWeight: 900,
+                        color: joined ? "#027a48" : "#b54708",
+                      }}
+                    >
+                      {joined ? "Joined" : "Not joined"}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <SmallText>No coaches loaded for this room yet.</SmallText>
+        )}
+      </Card>
+
+      <Card title="Snake Generator" right={<SmallText>Room: <strong>{ROOM_DISPLAY_NAME}</strong></SmallText>}>
+        <div style={{ display: "grid", gap: 10, maxWidth: 760 }}>
+          <label>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Block</div>
+            <select value={blockIdx} onChange={(e) => setBlockIdx(Number(e.target.value))} style={fieldBase}>
+              {BLOCKS.map((b, i) => (
+                <option key={b.label} value={i}>
+                  {b.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Coach IDs (comma separated)</div>
+            <input
+              suppressHydrationWarning
+              value={coachIdsStr}
+              onChange={(e) => setCoachIdsStr(e.target.value)}
+              style={fieldBase}
+            />
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+              <Button onClick={() => applyCoachPreset("two-coach-3-first")} disabled={busy}>
+                2 Coach Test: 3 then 1
+              </Button>
+
+              <Button onClick={() => applyCoachPreset("two-coach-3-second")} disabled={busy}>
+                2 Coach Test: 1 then 3
+              </Button>
+
+              <Button onClick={() => applyCoachPreset("full-8")} disabled={busy}>
+                Restore Full 8
+              </Button>
+            </div>
+
+            <SmallText>
+              Parsed: <strong>[{coachIdsParsed.join(", ")}]</strong>
+            </SmallText>
+          </label>
+
+          <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <input type="checkbox" checked={shuffle} onChange={(e) => setShuffle(e.target.checked)} />
+            <span style={{ fontWeight: 900 }}>Shuffle coach order for this block</span>
+          </label>
+
+          <label>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Seed (optional, number)</div>
+            <input
+              suppressHydrationWarning
+              value={seed}
+              onChange={(e) => setSeed(e.target.value)}
+              placeholder="e.g. 0.42"
+              style={fieldBase}
+            />
+          </label>
+
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <Button variant="primary" onClick={generate} disabled={busy}>
+              {busy ? "Generating..." : "Generate snake for selected block"}
+            </Button>
+            {msg ? <div style={{ fontWeight: 900 }}>{msg}</div> : null}
           </div>
         </div>
-      </div>
+      </Card>
 
-      <div style={{ display: "grid", gap: 10, maxWidth: 760 }}>
-        <div style={{ fontWeight: 900 }}>Snake Generator</div>
+      <Card
+        title="Live Draft Board"
+        right={
+          <Button onClick={() => setShowLiveBoard((v) => !v)}>
+            {showLiveBoard ? "Hide Live Draft Board" : "Show Live Draft Board"}
+          </Button>
+        }
+      >
+        {showLiveBoard ? (
+          <DraftClient key={roomId.trim()} />
+        ) : (
+          <SmallText>Live Draft Board hidden.</SmallText>
+        )}
+      </Card>
 
-        <label>
-          <div style={{ fontWeight: 800, marginBottom: 6 }}>Room ID</div>
-          <input
-            suppressHydrationWarning
-            value={roomIdInput}
-            onChange={(e) => setRoomIdInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") applyRoom();
-            }}
-            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
-          />
-        </label>
+      <Card title="Manual Order Editor">
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <SmallText>
+              Room: <strong>{ROOM_DISPLAY_NAME}</strong> • Block: <strong>{block.label}</strong> • Coaches:{" "}
+              <strong>{coachOptions.length}</strong> • Picks loaded: <strong>{draftOrder.length}</strong>
+            </SmallText>
 
-        <button
-          type="button"
-          onClick={() => applyRoom()}
-          style={{
-            padding: "10px 12px",
-            borderRadius: 10,
-            border: "1px solid #222",
-            background: "#fff",
-            fontWeight: 900,
-            cursor: "pointer",
-            width: "fit-content",
-          }}
-        >
-          Load room
-        </button>
+            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.9 }}>
+              Mode: <strong>Snake regen</strong> — edit one pick and the entire block updates (even rounds reverse).
+            </div>
 
-        <div style={{ fontSize: 12, opacity: 0.75 }}>
-          Active room: <strong>{roomId || "(none)"}</strong>
-        </div>
+            <label style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10 }}>
+              <input
+                type="checkbox"
+                checked={autoSaveAfterReset}
+                onChange={(e) => setAutoSaveAfterReset(e.target.checked)}
+              />
+              <span style={{ fontWeight: 950 }}>Auto-save to DB after reset</span>
+              <span style={{ fontSize: 12, opacity: 0.8 }}>(one-click “true reset”)</span>
+            </label>
 
-        <label>
-          <div style={{ fontWeight: 800, marginBottom: 6 }}>Block</div>
-          <select
-            value={blockIdx}
-            onChange={(e) => setBlockIdx(Number(e.target.value))}
-            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
-          >
-            {BLOCKS.map((b, i) => (
-              <option key={b.label} value={i}>
-                {b.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          <div style={{ fontWeight: 800, marginBottom: 6 }}>Coach IDs (comma separated)</div>
-          <input
-            suppressHydrationWarning
-            value={coachIdsStr}
-            onChange={(e) => setCoachIdsStr(e.target.value)}
-            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
-          />
-          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>
-            Parsed: [{coachIdsParsed.join(", ")}]
+            {Object.keys(edits).length > 0 ? (
+              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.9 }}>
+                Pending: <strong>{Object.keys(edits).length}</strong> edited picks in UI
+              </div>
+            ) : null}
           </div>
-        </label>
 
-        <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <input type="checkbox" checked={shuffle} onChange={(e) => setShuffle(e.target.checked)} />
-          <span style={{ fontWeight: 800 }}>Shuffle coach order for this block</span>
-        </label>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <Button onClick={() => loadData(roomId.trim())} disabled={editorLocked}>
+              Refresh
+            </Button>
 
-        <label>
-          <div style={{ fontWeight: 800, marginBottom: 6 }}>Seed (optional, number)</div>
-          <input
-            suppressHydrationWarning
-            value={seed}
-            onChange={(e) => setSeed(e.target.value)}
-            placeholder="e.g. 0.42"
-            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
-          />
-        </label>
+            <Button onClick={resetBlockToGenerated} disabled={resetBusy || saveBusy || busy || !nCoaches}>
+              {resetBusy ? `Resetting ${block.label}...` : `Reset block (${block.label})`}
+            </Button>
 
-        <button
-          type="button"
-          onClick={generate}
-          disabled={busy}
-          style={{
-            padding: "12px 14px",
-            borderRadius: 10,
-            border: "1px solid #222",
-            background: busy ? "#aaa" : "#111",
-            color: "#fff",
-            fontWeight: 900,
-            cursor: busy ? "not-allowed" : "pointer",
-          }}
-        >
-          {busy ? "Generating..." : "Generate snake for selected block"}
-        </button>
-
-        {msg ? <div style={{ marginTop: 6, fontWeight: 800 }}>{msg}</div> : null}
-      </div>
-
-      <div style={{ marginTop: 18 }}>
-        <div style={{ fontWeight: 900, marginBottom: 8 }}>Live Draft Board</div>
-        <div style={{ fontWeight: 900, marginBottom: 8 }}>
-          Preview (room: <span style={{ fontFamily: "monospace" }}>{roomId.trim()}</span>)
-          {anyBusy ? <span style={{ marginLeft: 10, fontSize: 12, opacity: 0.7 }}>• updating…</span> : null}
+            <Button
+              variant="primary"
+              onClick={saveManualEdits}
+              disabled={saveBusy || Object.keys(edits).length === 0 || resetBusy}
+            >
+              {saveBusy ? "Saving..." : `Save block (${block.label})`}
+            </Button>
+          </div>
         </div>
-        <DraftClient key={`${roomId.trim()}-${refreshKey}`} />
-      </div>
 
-      <div style={{ marginTop: 18, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <div style={{ fontWeight: 900 }}>Manual Order Editor</div>
-        <button
-          type="button"
-          onClick={() => setShowManualEditor((v) => !v)}
-          style={{
-            padding: "10px 12px",
-            borderRadius: 10,
-            border: "1px solid #222",
-            background: "#fff",
-            fontWeight: 900,
-            cursor: "pointer",
-          }}
-        >
-          {showManualEditor ? "Hide Manual Order Editor" : "Show Manual Order Editor"}
-        </button>
-      </div>
+        {loadErr ? (
+          <pre style={{ marginTop: 12, padding: 12, background: "#fff5f5", border: "1px solid #f2c2c2" }}>
+            {loadErr}
+          </pre>
+        ) : null}
 
-      {showManualEditor ? (
-        <div style={{ marginTop: 12, border: "1px solid #ddd", borderRadius: 12, padding: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-            <div>
-              <h2 style={{ margin: 0 }}>Manual Order Editor</h2>
-              <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
-                Room: <strong>{roomId.trim() || "(blank)"}</strong> • Block: <strong>{block.label}</strong>
-                {" • "}
-                Coaches: <strong>{coachOptions.length}</strong>{" "}
-                {coachesSorted.length ? "(from coaches table)" : "(inferred from draft_order)"}
-                {" • "}
-                Picks loaded: <strong>{draftOrder.length}</strong>
+        {saveMsg ? <div style={{ marginTop: 12, fontWeight: 950 }}>{saveMsg}</div> : null}
+
+        {!coachOptions.length ? (
+          <div style={{ marginTop: 12, opacity: 0.9 }}>
+            No coach columns available yet. Add coaches for this room or generate at least one draft_order pick.
+          </div>
+        ) : !blockGrid ? (
+          <div style={{ marginTop: 12, opacity: 0.9 }}>Loading…</div>
+        ) : (
+          <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+            {(() => {
+              const pairs: Array<[number, number | null]> = [];
+              for (let r = block.from; r <= block.to; r += 2) {
+                pairs.push([r, r + 1 <= block.to ? r + 1 : null]);
+              }
+
+              const cellsByRound = new Map<number, any[]>();
+              for (const rr of blockGrid) cellsByRound.set(rr.round, rr.cells);
+
+              const compactSelect: React.CSSProperties = {
+                ...fieldBase,
+                padding: "6px 8px",
+                borderRadius: 10,
+                width: 220,
+                maxWidth: "100%",
+                fontWeight: 900,
+                height: 34,
+              };
+
+              const rowStyle: React.CSSProperties = {
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                padding: "6px 0",
+                borderBottom: "1px solid #f3f4f6",
+              };
+
+              const leftMeta: React.CSSProperties = {
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                minWidth: 160,
+                flexWrap: "wrap",
+              };
+
+              const pill: React.CSSProperties = {
+                fontSize: 12,
+                fontWeight: 950,
+                padding: "2px 8px",
+                borderRadius: 999,
+                border: "1px solid #e5e7eb",
+                background: "#fff",
+                color: "#111",
+              };
+
+              function RoundColumn({ round }: { round: number }) {
+                const cells = cellsByRound.get(round) || [];
+
+                return (
+                  <div
+                    style={{
+                      background: "#fff",
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 14,
+                      padding: 12,
+                      minWidth: 320,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                      <div style={{ fontWeight: 950, fontSize: 14 }}>Round {round}</div>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>{cells.length} picks</div>
+                    </div>
+
+                    <div style={{ marginTop: 10 }}>
+                      {cells.map((cell) => {
+                        const currentName =
+                          cell.coachId != null
+                            ? coachNameById.get(cell.coachId) ?? `Coach ${cell.coachId}`
+                            : "—";
+                        const edited = Object.prototype.hasOwnProperty.call(edits, cell.overallPick);
+
+                        return (
+                          <div key={cell.overallPick} style={{ ...rowStyle, opacity: editorLocked ? 0.95 : 1 }}>
+                            <div style={leftMeta}>
+                              <span style={pill}>P{cell.pickInRound}</span>
+                              <span style={{ fontSize: 12, opacity: 0.8 }}>#{cell.overallPick}</span>
+                              {edited ? <span style={{ ...pill, borderColor: "#111" }}>edited</span> : null}
+                            </div>
+
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                              <select
+                                disabled={editorLocked}
+                                value={cell.coachId ?? ""}
+                                onChange={(e) => setCell(cell.overallPick, Number(e.target.value))}
+                                style={{
+                                  ...compactSelect,
+                                  border: edited ? "2px solid #111" : (compactSelect.border as any),
+                                  background: editorLocked ? "#f3f4f6" : edited ? "#fff6d6" : "#fff",
+                                  cursor: editorLocked ? "not-allowed" : "pointer",
+                                }}
+                              >
+                                <option value="" disabled>
+                                  Select coach…
+                                </option>
+                                {coachOptions.map((c) => (
+                                  <option key={c.id} value={c.id}>
+                                    {c.name}
+                                  </option>
+                                ))}
+                              </select>
+
+                              <div style={{ fontSize: 12, opacity: 0.8 }}>
+                                Current: <strong>{currentName}</strong>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div style={{ display: "grid", gap: 12 }}>
+                  {pairs.map(([a, b]) => (
+                    <div
+                      key={`${a}-${b ?? "x"}`}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                        gap: 12,
+                        alignItems: "start",
+                      }}
+                    >
+                      <RoundColumn round={a} />
+                      {b ? <RoundColumn round={b} /> : <div />}
+                    </div>
+                  ))}
+
+                  <SmallText>
+                    Tip: change any pick and the whole block is recalculated as a snake. Then hit{" "}
+                    <strong>Save block</strong> to write it to <code>draft_order</code>. Use{" "}
+                    <strong>Reset block</strong> to revert unsaved edits.
+                  </SmallText>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+      </Card>
+
+      <Card
+        title="Admin Proxy Pick (Absent Coach)"
+        right={
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <SmallText>
+              room: <strong>{ROOM_DISPLAY_NAME}</strong>
+              {proxyBusy ? <span style={{ marginLeft: 8, opacity: 0.8 }}>• drafting…</span> : null}
+            </SmallText>
+
+            <Button onClick={() => setShowProxyPick((v) => !v)} disabled={anyBusy && !showProxyPick}>
+              {showProxyPick ? "Hide Admin Proxy Pick" : "Show Admin Proxy Pick"}
+            </Button>
+          </div>
+        }
+      >
+        {showProxyPick ? (
+          <>
+            <SmallText>
+              Use only if a coach is absent. This drafts on their behalf on the <strong>Admin screen</strong> (no new page).
+            </SmallText>
+
+            <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ minWidth: 240 }}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>Coach</div>
+                <select value={proxyCoachId} onChange={(e) => setProxyCoachId(Number(e.target.value))} style={fieldBase}>
+                  {coachOptions.length
+                    ? coachOptions.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))
+                    : [1, 2, 3, 4, 5, 6, 7, 8].map((id) => (
+                        <option key={id} value={id}>
+                          Coach {id}
+                        </option>
+                      ))}
+                </select>
               </div>
 
-              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
-                Mode: <strong>Snake regen</strong> — edit one pick and the entire block updates (even rounds reverse).
-              </div>
-
-              <label style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 8 }}>
+              <div style={{ flex: 1, minWidth: 260 }}>
+                <div style={{ fontWeight: 900, marginBottom: 6 }}>Search</div>
                 <input
-                  type="checkbox"
-                  checked={autoSaveAfterReset}
-                  onChange={(e) => setAutoSaveAfterReset(e.target.checked)}
+                  suppressHydrationWarning
+                  value={proxySearch}
+                  onChange={(e) => setProxySearch(e.target.value)}
+                  placeholder="Search name / club / # / pos…"
+                  style={fieldBase}
                 />
-                <span style={{ fontWeight: 900 }}>Auto-save to DB after reset</span>
-                <span style={{ fontSize: 12, opacity: 0.7 }}>(one-click “true reset”)</span>
-              </label>
+              </div>
 
-              {Object.keys(edits).length > 0 ? (
-                <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
-                  Pending: <strong>{Object.keys(edits).length}</strong> edited picks in UI • Save will write{" "}
-                  <strong>{willWriteCount}</strong> picks for <strong>{block.label}</strong>
+              <Button
+                onClick={() => {
+                  setProxyMsg("");
+                  setProxyErr("");
+                  loadProxyPlayers(roomId.trim());
+                }}
+                disabled={anyBusy || !roomId.trim()}
+              >
+                Refresh players
+              </Button>
+            </div>
+
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
+              {POS_TABS.map((k) => {
+                const active = proxyTab === k;
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setProxyTab(k)}
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: 10,
+                      border: active ? "2px solid #111" : "1px solid #d1d5db",
+                      background: active ? "#111" : "#fff",
+                      color: active ? "#fff" : "#111",
+                      fontWeight: 950,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {POS_LABEL[k]}
+                  </button>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() => setProxyShowDrafted((v) => !v)}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 10,
+                  border: "1px solid #d1d5db",
+                  background: proxyShowDrafted ? "#fff6d6" : "#fff",
+                  color: "#111",
+                  fontWeight: 950,
+                  cursor: "pointer",
+                }}
+                title="Show/hide drafted players"
+              >
+                {proxyShowDrafted ? "Showing drafted too" : "Available only"}
+              </button>
+            </div>
+
+            {proxyErr ? (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: 10,
+                  borderRadius: 12,
+                  border: "1px solid #f2c2c2",
+                  background: "#fff5f5",
+                  fontWeight: 900,
+                }}
+              >
+                {proxyErr}
+              </div>
+            ) : null}
+
+            {proxyMsg ? <div style={{ marginTop: 10, fontWeight: 950 }}>{proxyMsg}</div> : null}
+
+            <div style={{ marginTop: 10 }}>
+              <SmallText>
+                Sorting:{" "}
+                <button type="button" onClick={() => toggleProxySort("average")} style={{ fontWeight: 900 }}>
+                  Avg
+                </button>{" "}
+                ·{" "}
+                <button type="button" onClick={() => toggleProxySort("player_no")} style={{ fontWeight: 900 }}>
+                  #
+                </button>{" "}
+                ·{" "}
+                <button type="button" onClick={() => toggleProxySort("player_name")} style={{ fontWeight: 900 }}>
+                  Name
+                </button>{" "}
+                ·{" "}
+                <button type="button" onClick={() => toggleProxySort("club")} style={{ fontWeight: 900 }}>
+                  Club
+                </button>{" "}
+                <span style={{ opacity: 0.75 }}>
+                  ({proxySortKey} {proxySortDir}) • showing <strong>{proxyFiltered.length}</strong>
+                </span>
+              </SmallText>
+            </div>
+
+            <div style={{ marginTop: 10, overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>#</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Player</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Pos</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Club</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Avg</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #e5e7eb" }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {proxyFiltered.slice(0, 120).map((p) => {
+                    const drafted = p.drafted_by_coach_id != null;
+                    const disabled = proxyBusy || !draftState || !!draftState?.is_paused || drafted || !roomId.trim();
+
+                    return (
+                      <tr key={p.player_no} style={{ opacity: disabled ? 0.75 : 1 }}>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6", fontWeight: 950 }}>{p.player_no}</td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6", fontWeight: 900 }}>
+                          {p.player_name}
+                          {drafted ? (
+                            <div style={{ marginTop: 2, fontSize: 12, opacity: 0.75 }}>
+                              Drafted by Coach {p.drafted_by_coach_id} ({p.drafted_round}.{p.drafted_pick})
+                            </div>
+                          ) : null}
+                        </td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{p.pos}</td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{p.club}</td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>{p.average}</td>
+                        <td style={{ padding: 8, borderBottom: "1px solid #f3f4f6" }}>
+                          <Button variant="primary" onClick={() => proxyDraftPlayer(p)} disabled={disabled}>
+                            {proxyBusy ? "Drafting..." : `Draft for ${proxyCoachName}`}
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {proxyFiltered.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} style={{ padding: 10, opacity: 0.75 }}>
+                        No players match your filters.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+
+              {proxyFiltered.length > 120 ? (
+                <div style={{ marginTop: 8 }}>
+                  <SmallText>
+                    Showing first <strong>120</strong> results (to keep Admin fast). Narrow with search/tabs.
+                  </SmallText>
                 </div>
               ) : null}
             </div>
 
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <button
-                type="button"
-                onClick={() => loadData(roomId.trim())}
-                disabled={editorLocked}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "1px solid #222",
-                  background: editorLocked ? "#eee" : "#fff",
-                  fontWeight: 900,
-                  cursor: editorLocked ? "not-allowed" : "pointer",
-                }}
-              >
-                Refresh
-              </button>
-
-              <button
-                type="button"
-                onClick={resetBlockToGenerated}
-                disabled={resetBusy || saveBusy || busy || !nCoaches}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "1px solid #222",
-                  background: resetBusy ? "#ddd" : "#fff",
-                  fontWeight: 900,
-                  cursor: resetBusy ? "not-allowed" : "pointer",
-                }}
-                title="Reset the editor back to the last saved/generated order for this block"
-              >
-                {resetBusy ? `Resetting ${block.label}...` : `Reset block (${block.label})`}
-              </button>
-
-              <button
-                type="button"
-                onClick={saveManualEdits}
-                disabled={saveBusy || Object.keys(edits).length === 0 || resetBusy}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "1px solid #222",
-                  background: saveBusy || Object.keys(edits).length === 0 || resetBusy ? "#aaa" : "#111",
-                  color: "#fff",
-                  fontWeight: 900,
-                  cursor: saveBusy || Object.keys(edits).length === 0 || resetBusy ? "not-allowed" : "pointer",
-                }}
-                title="Save the entire block to draft_order (snake regen mode)"
-              >
-                {saveBusy
-                  ? "Saving..."
-                  : Object.keys(edits).length === 0
-                  ? `Save block (${block.label})`
-                  : `Save block (${block.label}) • write ${(block.to - block.from + 1) * nCoaches}`}
-              </button>
+            <div style={{ marginTop: 10 }}>
+              <SmallText>
+                Safety rules: proxy draft is blocked if the draft is <strong>paused</strong>. It uses{" "}
+                <code>p_override_turn: true</code> so Admin can draft for an absent coach even if it’s not that coach’s pick.
+              </SmallText>
             </div>
+          </>
+        ) : (
+          <SmallText>Admin Proxy Pick hidden. Click “Show Admin Proxy Pick” when you need it.</SmallText>
+        )}
+      </Card>
+
+      <Card
+        title="Admin Tools"
+        right={
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <SmallText>
+              Room: <strong>{ROOM_DISPLAY_NAME}</strong>
+            </SmallText>
+
+            <Button onClick={() => setShowDebug((v) => !v)} disabled={anyBusy}>
+              {showDebug ? "Hide debug" : "Show debug"}
+            </Button>
           </div>
-
-          {loadErr ? (
-            <pre style={{ marginTop: 10, padding: 10, background: "#fff5f5", border: "1px solid #f2c2c2" }}>
-              {loadErr}
-            </pre>
-          ) : null}
-
-          {saveMsg ? <div style={{ marginTop: 10, fontWeight: 900 }}>{saveMsg}</div> : null}
-
-          {!coachOptions.length ? (
-            <div style={{ marginTop: 12, opacity: 0.85 }}>
-              No coach columns available yet. Add coaches for this room or generate at least one draft_order pick.
-            </div>
-          ) : !blockGrid ? (
-            <div style={{ marginTop: 12, opacity: 0.85 }}>Loading…</div>
-          ) : (
-            <div style={{ marginTop: 12, overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr>
-                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Round</th>
-                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Pick</th>
-                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Overall</th>
-                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ddd" }}>Coach</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {blockGrid.flatMap((r) =>
-                    r.cells.map((cell) => {
-                      const currentName =
-                        cell.coachId != null
-                          ? coachNameById.get(cell.coachId) ?? `Coach ${cell.coachId}`
-                          : "—";
-                      const edited = Object.prototype.hasOwnProperty.call(edits, cell.overallPick);
-
-                      return (
-                        <tr key={cell.overallPick} style={{ opacity: editorLocked ? 0.95 : 1 }}>
-                          <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0", fontWeight: 900 }}>
-                            {cell.round}
-                          </td>
-                          <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0" }}>{cell.pickInRound}</td>
-                          <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0" }}>#{cell.overallPick}</td>
-                          <td style={{ padding: 8, borderBottom: "1px solid #f0f0f0" }}>
-                            <select
-                              disabled={editorLocked}
-                              value={cell.coachId ?? ""}
-                              onChange={(e) => setCell(cell.overallPick, Number(e.target.value))}
-                              style={{
-                                width: "100%",
-                                padding: 8,
-                                borderRadius: 8,
-                                border: edited ? "2px solid #111" : "1px solid #ccc",
-                                background: editorLocked ? "#f3f3f3" : edited ? "#fff6d6" : "#fff",
-                                color: editorLocked ? "#777" : "#000",
-                                fontWeight: 800,
-                                cursor: editorLocked ? "not-allowed" : "pointer",
-                                opacity: editorLocked ? 0.85 : 1,
-                              }}
-                            >
-                              <option value="" disabled>
-                                Select coach…
-                              </option>
-                              {coachOptions.map((c) => (
-                                <option key={c.id} value={c.id}>
-                                  {c.name}
-                                </option>
-                              ))}
-                            </select>
-
-                            <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
-                              Current: <strong>{currentName}</strong>
-                              {edited ? " • edited" : ""}
-                              {editorLocked ? " • locked" : ""}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-
-              <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-                Tip: change any pick and the whole block is recalculated as a snake. Then hit{" "}
-                <strong>Save block</strong> to write it to <code>draft_order</code>. Use{" "}
-                <strong>Reset block</strong> to revert your unsaved edits (and auto-save if enabled).
+        }
+      >
+        {showDebug ? (
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={{ display: "grid", gap: 10 }}>
+              <div>
+                <SmallText>
+                  Run the 8-coach simulator using the room’s current <code>draft_order</code>. Leave manual coach IDs
+                  blank for a full auto sim, or enter coach IDs like <strong>2,7</strong> to stop when those coaches
+                  are on the clock.
+                </SmallText>
+                {toolsMsg ? <div style={{ marginTop: 10, fontWeight: 950 }}>{toolsMsg}</div> : null}
               </div>
-            </div>
-          )}
-        </div>
-      ) : null}
 
-      <div style={{ marginTop: 18, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <div style={{ fontWeight: 900 }}>Draft Health Monitor</div>
-        <button
-          type="button"
-          onClick={() => setShowHealthMonitor((v) => !v)}
-          style={{
-            padding: "10px 12px",
-            borderRadius: 10,
-            border: "1px solid #222",
-            background: "#fff",
-            fontWeight: 900,
-            cursor: "pointer",
-          }}
-        >
-          {showHealthMonitor ? "Hide Draft Health Monitor" : "Show Draft Health Monitor"}
-        </button>
+              <div style={{ display: "grid", gap: 10, maxWidth: 760 }}>
+                <label>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Manual coach IDs (optional, comma separated)</div>
+                  <input
+                    suppressHydrationWarning
+                    value={manualCoachIdsStr}
+                    onChange={(e) => setManualCoachIdsStr(e.target.value)}
+                    placeholder="e.g. 2,7"
+                    style={fieldBase}
+                  />
+                  <SmallText>
+                    Parsed:{" "}
+                    <strong>
+                      {manualCoachIdsParsed.length ? `[${manualCoachIdsParsed.join(", ")}]` : "none"}
+                    </strong>
+                  </SmallText>
+                </label>
 
-        <button
-          type="button"
-          onClick={() => loadHealthMonitor(roomId.trim())}
-          disabled={healthBusy || !roomId.trim()}
-          style={{
-            padding: "10px 12px",
-            borderRadius: 10,
-            border: "1px solid #222",
-            background: "#fff",
-            fontWeight: 900,
-            cursor: healthBusy || !roomId.trim() ? "not-allowed" : "pointer",
-            opacity: healthBusy || !roomId.trim() ? 0.7 : 1,
-          }}
-        >
-          {healthBusy ? "Refreshing..." : "Refresh Health"}
-        </button>
-      </div>
+                <label>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Rounds</div>
+                  <input
+                    suppressHydrationWarning
+                    value={simRounds}
+                    onChange={(e) => setSimRounds(e.target.value)}
+                    placeholder="46"
+                    style={fieldBase}
+                  />
+                </label>
 
-      {showHealthMonitor ? (
-        <div
-          style={{
-            marginTop: 12,
-            border: "1px solid #ddd",
-            borderRadius: 12,
-            padding: 12,
-            background: "#fafafa",
-          }}
-        >
-          <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 10 }}>
-            Live admin snapshot for quick draft-night diagnosis.
-          </div>
+                <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={resetDraftBeforeSim}
+                    onChange={(e) => setResetDraftBeforeSim(e.target.checked)}
+                  />
+                  <span style={{ fontWeight: 900 }}>Reset draft before simulation</span>
+                </label>
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              gap: 10,
-            }}
-          >
-            <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, background: "#fff" }}>
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Room</div>
-              <div style={{ fontWeight: 900 }}>{roomId.trim() || "(blank)"}</div>
-            </div>
+                <div
+                  style={{
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 12,
+                    padding: 12,
+                    background: "#fff",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 950 }}>Simulation Progress</div>
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>
+                      {simProgressCurrent} / {simProgressTotal} picks
+                    </div>
+                  </div>
 
-            <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, background: "#fff" }}>
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Draft Status</div>
-              <div style={{ fontWeight: 900 }}>{healthStatusText}</div>
-            </div>
+                  <div
+                    style={{
+                      marginTop: 10,
+                      width: "100%",
+                      height: 14,
+                      borderRadius: 999,
+                      background: "#e5e7eb",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${simProgressPct}%`,
+                        height: "100%",
+                        background: "#111",
+                        transition: "width 180ms ease",
+                      }}
+                    />
+                  </div>
 
-            <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, background: "#fff" }}>
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Current Round</div>
-              <div style={{ fontWeight: 900 }}>{draftState?.current_round ?? "—"}</div>
-            </div>
+                  <div style={{ marginTop: 8, fontSize: 12, fontWeight: 900 }}>
+                    {simProgressPct}% • {simProgressLabel}
+                  </div>
 
-            <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, background: "#fff" }}>
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Current Pick</div>
-              <div style={{ fontWeight: 900 }}>{draftState?.current_pick_in_round ?? "—"}</div>
-            </div>
+                  {simWaitingForManual && simStoppedForCoachId ? (
+                    <div style={{ marginTop: 6, fontSize: 12, fontWeight: 900, color: "#b54708" }}>
+                      Waiting for manual coach {simStoppedForCoachId} to make their pick. The sim will auto-resume after
+                      that pick is made.
+                    </div>
+                  ) : null}
 
-            <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, background: "#fff" }}>
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Current Coach</div>
-              <div style={{ fontWeight: 900 }}>{draftState?.current_coach_id ?? "—"}</div>
-            </div>
-
-            <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, background: "#fff" }}>
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Rounds Total</div>
-              <div style={{ fontWeight: 900 }}>{draftState?.rounds_total ?? "—"}</div>
-            </div>
-
-            <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, background: "#fff" }}>
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Pause Reason</div>
-              <div style={{ fontWeight: 900 }}>
-                {pauseReasonLabel(draftState?.pause_reason ?? null) ?? "—"}
-              </div>
-            </div>
-
-            <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 10, background: "#fff" }}>
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Last DB Check</div>
-              <div style={{ fontWeight: 900 }}>{healthCheckedAt || "—"}</div>
-            </div>
-          </div>
-
-          <div
-            style={{
-              marginTop: 10,
-              border: "1px solid #e5e7eb",
-              borderRadius: 10,
-              padding: 12,
-              background: "#fff",
-            }}
-          >
-            <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Last Pick Written</div>
-
-            {lastPick ? (
-              <div style={{ display: "grid", gap: 4 }}>
-                <div style={{ fontWeight: 900 }}>
-                  {lastPick.player_name}
-                  {lastPick.pos ? ` • ${lastPick.pos}` : ""}
-                  {lastPick.club ? ` • ${lastPick.club}` : ""}
+                  {draftState ? (
+                    <div style={{ marginTop: 6, fontSize: 12, opacity: 0.8 }}>
+                      Draft state: Round {draftState.current_round} • Pick {draftState.current_pick_in_round} • Coach{" "}
+                      {draftState.current_coach_id}
+                    </div>
+                  ) : null}
                 </div>
-                <div style={{ fontSize: 13, opacity: 0.85 }}>
-                  Round: <strong>{lastPick.drafted_round ?? "—"}</strong> • Overall Pick:{" "}
-                  <strong>{lastPick.drafted_pick ?? "—"}</strong> • Coach:{" "}
-                  <strong>{lastPick.drafted_by_coach_id ?? "—"}</strong>
+
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <Button variant="primary" onClick={simulate8CoachDraft} disabled={toolsBusy || !roomId.trim()}>
+                    {toolsBusy ? "Simulating..." : "Run 8-coach simulation"}
+                  </Button>
+
+                  <Button onClick={exportPicksXlsx} disabled={toolsBusy || !roomId.trim()}>
+                    Export picks (XLSX)
+                  </Button>
                 </div>
               </div>
-            ) : (
-              <div style={{ opacity: 0.8 }}>
-                {healthBusy ? "Loading last pick…" : "No drafted player found yet."}
-              </div>
-            )}
-          </div>
-
-          {healthErr ? (
-            <div
-              style={{
-                marginTop: 10,
-                padding: 10,
-                borderRadius: 10,
-                background: "#fff5f5",
-                border: "1px solid #f2c2c2",
-                color: "#b91c1c",
-                fontWeight: 900,
-              }}
-            >
-              {healthErr}
             </div>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
+
+            <div style={{ paddingTop: 4 }}>
+              <SmallText>
+                Real room id in use:{" "}
+                <span style={{ fontFamily: "monospace", fontWeight: 950 }}>{roomId.trim() || "(blank)"}</span>
+              </SmallText>
+
+              <div style={{ display: "grid", gap: 10, maxWidth: 760, marginTop: 10 }}>
+                <label>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Room ID (advanced)</div>
+                  <input
+                    suppressHydrationWarning
+                    value={roomIdInput}
+                    onChange={(e) => setRoomIdInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") applyRoom();
+                    }}
+                    style={fieldBase}
+                  />
+                  <SmallText>Press Enter to load, or click the button below.</SmallText>
+                </label>
+
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <Button onClick={() => applyRoom()}>Load room</Button>
+                  <SmallText>This is mainly for troubleshooting or running multiple rooms.</SmallText>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <SmallText>Debug tools hidden. Click “Show debug” to reveal.</SmallText>
+        )}
+      </Card>
+    </Page>
   );
 }
