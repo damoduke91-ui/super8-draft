@@ -374,6 +374,12 @@ export default function AdminClient() {
     window.open(`/api/admin/export-picks?room=${encodeURIComponent(roomId.trim())}`, "_blank");
   }
 
+  function exportLiveDraftXlsx() {
+    setToolsMsg("");
+    if (!roomId.trim()) return setToolsMsg("Room id is required.");
+    window.open(`/api/admin/export-live-draft-xlsx?room_id=${encodeURIComponent(roomId.trim())}`, "_blank");
+  }
+
   function applyCoachPreset(mode: "two-coach-3-first" | "two-coach-3-second" | "full-8") {
     setShuffle(false);
     setSeed("");
@@ -2065,6 +2071,10 @@ export default function AdminClient() {
 
                   <Button onClick={exportPicksXlsx} disabled={toolsBusy || !roomId.trim()}>
                     Export picks (XLSX)
+                  </Button>
+
+                  <Button onClick={exportLiveDraftXlsx} disabled={toolsBusy || !roomId.trim()}>
+                    Create XLSX from Live Draft
                   </Button>
                 </div>
               </div>
