@@ -150,6 +150,7 @@ export default function AdminClient() {
   const [draftActionBusy, setDraftActionBusy] = useState(false);
   const [draftActionMsg, setDraftActionMsg] = useState<string>("");
   const [fixDraftBusy, setFixDraftBusy] = useState(false);
+  const [undoBusy, setUndoBusy] = useState(false);
 
   const [toolsBusy, setToolsBusy] = useState(false);
   const [toolsMsg, setToolsMsg] = useState("");
@@ -507,6 +508,42 @@ export default function AdminClient() {
       setDraftActionMsg(`Pause/resume failed: ${e?.message || String(e)}`);
     } finally {
       setDraftActionBusy(false);
+    }
+  }
+
+  async function undoLastPick() {
+    setDraftActionMsg("");
+    if (!roomId.trim()) return setDraftActionMsg("Room id is required.");
+
+    const ok = window.confirm(
+      `UNDO the last pick for "${ROOM_DISPLAY_NAME}"?\n\nThis will remove the most recent drafted player and move the draft back to that exact pick.`
+    );
+    if (!ok) return;
+
+    setUndoBusy(true);
+    try {
+      const { res, json } = await postJson("/api/admin/undo-last-pick", { roomId: roomId.trim() });
+
+      if (!res.ok || !json?.ok) {
+        setDraftActionMsg(`Undo failed: ${json?.error || json?.message || "Unknown error"}`);
+      } else {
+        const detail = json?.playerName
+          ? `: #${json.playerNo} ${json.playerName} (Coach ${json.coachId}, Round ${json.round}, Pick ${json.pick})`
+          : "";
+
+        setDraftActionMsg(`↩️ Last pick undone${detail}`);
+        setSimWaitingForManual(false);
+        setSimStoppedForCoachId(null);
+        setSimHasActiveSession(false);
+        await loadDraftState(roomId.trim());
+        await loadData(roomId.trim());
+        await loadProxyPlayers(roomId.trim());
+        setRefreshKey((k) => k + 1);
+      }
+    } catch (e: any) {
+      setDraftActionMsg(`Undo failed: ${e?.message || String(e)}`);
+    } finally {
+      setUndoBusy(false);
     }
   }
 
@@ -1202,7 +1239,16 @@ export default function AdminClient() {
   }
 
   const editorLocked = resetBusy || saveBusy;
-  const anyBusy = busy || saveBusy || resetBusy || draftActionBusy || fixDraftBusy || toolsBusy || proxyBusy || damianUploadBusy;
+  const anyBusy =
+    busy ||
+    saveBusy ||
+    resetBusy ||
+    draftActionBusy ||
+    fixDraftBusy ||
+    undoBusy ||
+    toolsBusy ||
+    proxyBusy ||
+    damianUploadBusy;
 
   return (
     <Page title="Super8 Draft — Admin" subtitle="Draft control centre">
@@ -1232,22 +1278,34 @@ export default function AdminClient() {
           </div>
 
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <Button variant="primary" onClick={startDraft} disabled={draftActionBusy || fixDraftBusy || !roomId.trim()}>
+            <Button
+              variant="primary"
+              onClick={startDraft}
+              disabled={draftActionBusy || fixDraftBusy || undoBusy || !roomId.trim()}
+            >
               {draftActionBusy ? "Working..." : "Start draft"}
             </Button>
 
             <Button
               onClick={() => pauseDraft(!(draftState?.is_paused ?? false))}
-              disabled={draftActionBusy || fixDraftBusy || !roomId.trim()}
+              disabled={draftActionBusy || fixDraftBusy || undoBusy || !roomId.trim()}
             >
               {draftState?.is_paused ? "Resume draft" : "Pause draft"}
             </Button>
 
-            <Button onClick={fixDraftState} disabled={draftActionBusy || fixDraftBusy || !roomId.trim()}>
+            <Button onClick={undoLastPick} disabled={draftActionBusy || fixDraftBusy || undoBusy || !roomId.trim()}>
+              {undoBusy ? "Undoing..." : "Undo last pick"}
+            </Button>
+
+            <Button onClick={fixDraftState} disabled={draftActionBusy || fixDraftBusy || undoBusy || !roomId.trim()}>
               {fixDraftBusy ? "Fixing..." : "Fix Draft State"}
             </Button>
 
-            <Button variant="danger" onClick={resetDraft} disabled={draftActionBusy || fixDraftBusy || !roomId.trim()}>
+            <Button
+              variant="danger"
+              onClick={resetDraft}
+              disabled={draftActionBusy || fixDraftBusy || undoBusy || !roomId.trim()}
+            >
               Reset draft
             </Button>
           </div>
