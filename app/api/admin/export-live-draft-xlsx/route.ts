@@ -18,10 +18,6 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const roomId = searchParams.get("room_id") || "DUMMY1";
 
-    // Read only:
-    // this route does NOT update draft_state, players, draft_order, or any other data.
-    // it only reads the drafted result and creates an XLSX file.
-
     const { data: players, error: playersError } = await supabaseAdmin
       .from("players")
       .select("*")
@@ -63,14 +59,8 @@ export async function GET(req: Request) {
       if (roundDiff !== 0) return roundDiff;
 
       const pickInRoundDiff =
-        toNumber(a.drafted_pick_in_round, 9999) -
-        toNumber(b.drafted_pick_in_round, 9999);
+        toNumber(a.drafted_pick, 9999) - toNumber(b.drafted_pick, 9999);
       if (pickInRoundDiff !== 0) return pickInRoundDiff;
-
-      const overallPickDiff =
-        toNumber(a.drafted_overall_pick, 9999) -
-        toNumber(b.drafted_overall_pick, 9999);
-      if (overallPickDiff !== 0) return overallPickDiff;
 
       const draftedAtA = safeString(a.drafted_at);
       const draftedAtB = safeString(b.drafted_at);
@@ -84,14 +74,12 @@ export async function GET(req: Request) {
         player.drafted_round == null ? "" : toNumber(player.drafted_round);
 
       const draftedPickInRound =
-        player.drafted_pick_in_round == null
-          ? ""
-          : toNumber(player.drafted_pick_in_round);
+        player.drafted_pick == null ? "" : toNumber(player.drafted_pick);
 
       const draftedOverallPick =
-        player.drafted_overall_pick == null
-          ? index + 1
-          : toNumber(player.drafted_overall_pick);
+        draftedRound !== "" && draftedPickInRound !== ""
+          ? (Number(draftedRound) - 1) * 8 + Number(draftedPickInRound)
+          : index + 1;
 
       return {
         "Overall Pick": draftedOverallPick,
